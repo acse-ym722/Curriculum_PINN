@@ -119,3 +119,41 @@ class BurgersFDM:
         print("-" * 60 + "\n")
         
         return self.u, self.x, self.t
+    
+    def save_solution(self, filepath):
+        """
+        Save FDM solution for use as training data
+        
+        Args:
+            filepath: Path to save the data (e.g., 'outputs/burgers/fdm_data.npz')
+        """
+        np.savez(filepath,
+                 x=self.x,
+                 t=self.t,
+                 u=self.u,
+                 nu=self.nu,
+                 nx=self.nx,
+                 nt=self.nt)
+        print(f"✓ FDM solution saved to {filepath}")
+    
+    @staticmethod
+    def load_solution(filepath):
+        """
+        Load saved FDM solution
+        
+        Args:
+            filepath: Path to the saved data
+        
+        Returns:
+            Dictionary containing x, t, u, and metadata
+        """
+        data = np.load(filepath)
+        print(f"✓ FDM solution loaded from {filepath}")
+        return {
+            'x': data['x'],
+            't': data['t'],
+            'u': data['u'],
+            'nu': float(data['nu']),
+            'nx': int(data['nx']),
+            'nt': int(data['nt'])
+        }

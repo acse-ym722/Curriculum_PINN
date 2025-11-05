@@ -107,11 +107,16 @@ Theoretical investigation focuses on:
 
 ```bash
 # Run Burgers equation experiment
-python -m src.experiment_burgers --config default --output outputs/burgers_default
+python -m src.experiment_burgers --config default
+python -m src.experiment_burgers --config default --use-data-loss
+python -m src.eexperiment_burgers --config with_data
 
 # Run Cavity flow experiment
-python -m src.experiment_cavity --config low_re --output outputs/cavity_low_re
+python -m src.experiment_cavity --config low_re --use-data-loss
 python -m src.experiment_cavity --config high_re --output outputs/cavity_high_re
+
+# Run Cyliner flow experiment
+python -m src.experiment_cylinder --config low_re --use-data-loss
 ```
 
 ### Configuration Examples

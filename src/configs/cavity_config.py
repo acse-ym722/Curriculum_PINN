@@ -42,10 +42,16 @@ CAVITY_CONFIG = {
     "N_bc": 1000,    # Boundary condition points
     "N_pde": 10000,  # PDE collocation points
     
+    # Data loss parameters
+    "use_data_loss": False,      # 默认不使用，实验时设置为True
+    "N_data": 500,               # 数据采样点数量
+    "fdm_solver": None,          # FDM solver对象，运行时指定
+    
     # Loss weights
     "lambda_bc": 15.0,
     "lambda_pde": 1.0,
     "lambda_cont": 1.0,  # Continuity equation weight
+    "lambda_data": 1.0,  # Data loss weight
     
     # Numerical solution (ground truth)
     "fdm_grid_size": 64,
@@ -55,6 +61,15 @@ CAVITY_CONFIG = {
     
     # Visualization
     "plot_resolution": 100,
+}
+
+
+# Configuration with data loss enabled
+CAVITY_WITH_DATA = {
+    **CAVITY_CONFIG,
+    "use_data_loss": True,
+    "N_data": 1000,
+    "lambda_data": 10.0,  # 增加data loss权重
 }
 
 
@@ -120,6 +135,7 @@ def get_config(config_name='default'):
     """
     configs = {
         'default': CAVITY_CONFIG,
+        'with_data': CAVITY_WITH_DATA,
         'low_re': CAVITY_LOW_RE,
         'high_re': CAVITY_HIGH_RE,
         'deep': CAVITY_DEEP,

@@ -23,25 +23,40 @@ BURGERS_CONFIG = {
     "lr_decay_rate": 0.9,
     
     # Curriculum learning parameters
-    "curriculum_ramp_ratio": 0.4,  # Portion of training for beta ramp-up
+    "curriculum_ramp_ratio": 0.4,  # Portion of training for nu ramp
     
     # Data points
     "N_ic": 100,   # Initial condition points
     "N_bc": 100,   # Boundary condition points
     "N_pde": 10000,  # PDE collocation points
-    
+
+    # Data loss parameters
+    "use_data_loss": False,      # 默认不使用，实验时设置为True
+    "N_data": 500,               # 数据采样点数量
+    "fdm_solution": None,        # FDM solution tuple (u, x, t)，运行时指定
+
     # Loss weights
     "lambda_ic": 1.0,
     "lambda_bc": 1.0,
     "lambda_pde": 1.0,
-    
-    # Numerical solution (ground truth)
-    "NX": 512,     # Spatial grid points
-    "NT": 10000,   # Time steps
+    "lambda_data": 1.0,
+
+    # Numerical solution (ground truth) - FDM parameters
+    "fdm_nx": 512,     # Spatial grid points
+    "fdm_nt": 10000,   # Time steps
     
     # Visualization
-    "plot_t_final": 0.01,  # Time for final comparison
+    "plot_t_final": 0.99,  # Time for final comparison
     "plot_x_points": 512,  # Spatial resolution for plotting
+}
+
+
+# Configuration with data loss enabled
+BURGERS_WITH_DATA = {
+    **BURGERS_CONFIG,
+    "use_data_loss": True,
+    "N_data": 1000,
+    "lambda_data": 10.0,  # 增加data loss权重
 }
 
 
@@ -96,6 +111,7 @@ def get_config(config_name='default'):
     """
     configs = {
         'default': BURGERS_CONFIG,
+        'with_data': BURGERS_WITH_DATA,
         'high_nu': BURGERS_HIGH_NU,
         'low_nu': BURGERS_LOW_NU,
         'resnet': BURGERS_RESNET,

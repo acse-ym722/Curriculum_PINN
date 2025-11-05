@@ -216,13 +216,19 @@ class BasePINNSolver(ABC):
                 elapsed = time.time() - start_time
                 lr = self.optimizer.param_groups[0]['lr']
                 
-                print(f"Epoch {epoch+1:6d}/{epochs}: "
-                      f"Loss = {loss_dict['total']:.4e}, "
-                      f"IC = {loss_dict['ic']:.2e}, "
-                      f"BC = {loss_dict['bc']:.2e}, "
-                      f"PDE = {loss_dict['pde']:.2e}, "
-                      f"LR = {lr:.2e}, "
-                      f"Time = {elapsed:.1f}s")
+                # 构建打印信息
+                log_msg = (f"Epoch {epoch+1:6d}/{epochs}: "
+                        f"Loss = {loss_dict['total']:.4e}, "
+                        f"IC = {loss_dict['ic']:.2e}, "
+                        f"BC = {loss_dict['bc']:.2e}, "
+                        f"PDE = {loss_dict['pde']:.2e}")
+                
+                # 如果使用了 data loss，添加到日志中
+                if self.config.get('use_data_loss', False):
+                    log_msg += f", Data = {loss_dict['data']:.2e}"
+                
+                log_msg += f", LR = {lr:.2e}, Time = {elapsed:.1f}s"
+                print(log_msg)
         
         elapsed = time.time() - start_time
         if verbose:

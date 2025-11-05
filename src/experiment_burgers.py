@@ -31,8 +31,8 @@ def check_fdm_stability(config):
     print("PRE-FLIGHT CHECK: FDM Stability Analysis")
     print("="*80)
     
-    nx = config["NX"]
-    nt = config["NT"]
+    nx = config["fdm_nx"]
+    nt = config["fdm_nt"]
     x_domain = config["x_domain"]
     t_domain = config["t_domain"]
     nu = config["nu"]
@@ -53,29 +53,36 @@ def check_fdm_stability(config):
     if is_stable:
         print("  ✓ FDM parameters are STABLE")
     else:
-        print("  ✗ FDM parameters are UNSTABLE - consider adjusting NT or NX")
+        print("  ✗ FDM parameters are UNSTABLE - consider adjusting fdm_nt or fdm_nx")
     
     print("="*80 + "\n")
     
     return is_stable
 
 
-def run_burgers_experiment(config_name='default', output_dir='outputs/burgers'):
+def run_burgers_experiment(config_name='default', output_dir='outputs/burgers', 
+                          use_data_loss=False):
     """
     Run complete Burgers equation experiment
     
     Args:
         config_name: Name of configuration to use
         output_dir: Directory to save outputs
+        use_data_loss: Whether to use data loss in training
     """
     # Load configuration
     config = get_config(config_name)
+    
+    # Override data loss setting if specified
+    if use_data_loss:
+        config['use_data_loss'] = True
+        print(f"\n⚠ Data loss ENABLED with {config['N_data']} sampling points")
     
     print("\n" + "="*80)
     print(f"BURGERS EQUATION EXPERIMENT: {config_name}")
     print("="*80)
     print("\nConfiguration:")
-    print(json.dumps(config, indent=2))
+    print(json.dumps({k: v for k, v in config.items() if k != 'fdm_solution'}, indent=2))
     print("="*80 + "\n")
     
     # Check stability
@@ -98,10 +105,13 @@ def run_burgers_experiment(config_name='default', output_dir='outputs/burgers'):
         nu=config['nu'],
         x_domain=config['x_domain'],
         t_domain=config['t_domain'],
-        nx=config['NX'],
-        nt=config['NT']
+        nx=config['fdm_nx'],
+        nt=config['fdm_nt']
     )
     u_exact, x_grid, t_grid = fdm_solver.solve()
+    
+    # Store FDM solution in config for data loss
+    fdm_solution = (u_exact, x_grid, t_grid)
     
     # ==================== STEP 2: Train Standard PINN ====================
     print("="*80)
@@ -127,7 +137,7 @@ def run_burgers_experiment(config_name='default', output_dir='outputs/burgers'):
                                 sigma=config.get('sigma', 1.0),
                                 activation=config['activation'])
     
-    # Create solver
+    # Create solver config (注入FDM solution)
     standard_config = {
         'nu': config['nu'],
         'x_domain': config['x_domain'],
@@ -138,12 +148,16 @@ def run_burgers_experiment(config_name='default', output_dir='outputs/burgers'):
         'lambda_ic': config['lambda_ic'],
         'lambda_bc': config['lambda_bc'],
         'lambda_pde': config['lambda_pde'],
+        'lambda_data': config['lambda_data'],
         'epochs': config['epochs'],
         'learning_rate': config['learning_rate'],
         'optimizer': config.get('optimizer', 'adam'),
         'use_scheduler': config.get('use_scheduler', True),
         'lr_decay_steps': config.get('lr_decay_steps', 5000),
         'lr_decay_rate': config.get('lr_decay_rate', 0.9),
+        'use_data_loss': config['use_data_loss'],
+        'N_data': config['N_data'],
+        'fdm_solution': fdm_solution if config['use_data_loss'] else None,
     }
     
     pinn_standard = BurgersPINN(model_std, standard_config, device=device)
@@ -188,11 +202,11 @@ def run_burgers_experiment(config_name='default', output_dir='outputs/burgers'):
         'config': config,
         'standard': {
             'solver': pinn_standard,
-            'label': 'Standard PINN'
+            'label': 'Standard PINN' + (' (with data)' if config['use_data_loss'] else '')
         },
         'curriculum': {
             'solver': pinn_curriculum,
-            'label': 'Curriculum PINN'
+            'label': 'Curriculum PINN' + (' (with data)' if config['use_data_loss'] else '')
         },
         'exact': {
             'solution': u_exact,
@@ -210,14 +224,17 @@ def run_burgers_experiment(config_name='default', output_dir='outputs/burgers'):
     pinn_standard.save_model(os.path.join(output_dir, 'standard_pinn.pt'))
     pinn_curriculum.save_model(os.path.join(output_dir, 'curriculum_pinn.pt'))
     
-    # Save configuration
+    # Save configuration (exclude fdm_solution)
+    config_to_save = {k: v for k, v in config.items() if k != 'fdm_solution'}
     with open(os.path.join(output_dir, 'config.json'), 'w') as f:
-        json.dump(config, f, indent=2)
+        json.dump(config_to_save, f, indent=2)
     
     print("\n" + "="*80)
     print("EXPERIMENT COMPLETED SUCCESSFULLY!")
     print("="*80)
     print(f"Results saved to: {output_dir}")
+    if config['use_data_loss']:
+        print(f"✓ Data loss was ENABLED with {config['N_data']} sampling points")
     print("="*80 + "\n")
 
 
@@ -226,10 +243,16 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='Run Burgers equation experiment')
     parser.add_argument('--config', type=str, default='default',
-                       help='Configuration name (default, high_nu, low_nu, resnet, fourier)')
+                       help='Configuration name (default, with_data, high_nu, low_nu, resnet, fourier)')
     parser.add_argument('--output', type=str, default='outputs/burgers',
                        help='Output directory')
+    parser.add_argument('--use-data-loss', action='store_true',
+                       help='Enable data loss during training')
     
     args = parser.parse_args()
     
-    run_burgers_experiment(config_name=args.config, output_dir=args.output)
+    run_burgers_experiment(
+        config_name=args.config, 
+        output_dir=args.output,
+        use_data_loss=args.use_data_loss
+    )

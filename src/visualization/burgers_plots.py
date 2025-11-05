@@ -16,7 +16,7 @@ def plot_burgers_comparison(results, output_dir='outputs/burgers'):
     """
     config = results['config']
     nu = config['nu']
-    t_final = config.get('plot_t_final', 0.01)
+    t_final = config.get('plot_t_final', 0.99)
     
     fig, axes = plt.subplots(2, 2, figsize=(18, 14))
     fig.suptitle(f'PINN Performance for 1D Burgers Equation (ν={nu:.2e})', 

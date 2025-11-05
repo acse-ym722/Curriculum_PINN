@@ -103,11 +103,7 @@ class CurriculumNavierStokesPINN(NavierStokesPINN):
     
     def __init__(self, model, config, device='cuda'):
         # Curriculum stages: list of (Re, epochs)
-        self.curriculum_stages = config.get('curriculum_stages', [
-            {'Re': 10, 'epochs': 2000},
-            {'Re': 50, 'epochs': 3000},
-            {'Re': 100, 'epochs': 5000},
-        ])
+        self.curriculum_stages = config.get('curriculum_stages', [])
         
         # Store total epochs
         self.total_epochs = sum(stage['epochs'] for stage in self.curriculum_stages)
@@ -183,3 +179,70 @@ class CurriculumNavierStokesPINN(NavierStokesPINN):
         print("-"*80)
         print(f"✓ Training completed in {total_time:.1f}s")
         print("="*80 + "\n")
+
+
+from .standard_pinn import CylinderPINN
+class CurriculumCylinderPINN(CylinderPINN):
+    """
+    Curriculum learning PINN for cylinder flow
+    Gradually increases Reynolds number
+    """
+    
+    def __init__(self, model, config, device='cuda'):
+        self.curriculum_stages = config.get('curriculum_stages', [])
+        self.current_stage = 0
+        self.total_epochs_completed = 0
+        
+        # Initialize with first stage Reynolds number
+        config_copy = config.copy()
+        config_copy['Re'] = self.curriculum_stages[0]['Re']
+        
+        super().__init__(model, config_copy, device)
+        
+        # Store original config for later stages
+        self.base_config = config
+    
+    def train(self, verbose=True, save_interval=500):
+        """Train with curriculum learning"""
+        print("\n" + "="*80)
+        print("CURRICULUM LEARNING FOR CYLINDER FLOW")
+        print("="*80)
+        print(f"Total stages: {len(self.curriculum_stages)}")
+        for i, stage in enumerate(self.curriculum_stages):
+            print(f"  Stage {i+1}: Re = {stage['Re']}, Epochs = {stage['epochs']}")
+        print("="*80 + "\n")
+        
+        for stage_idx, stage in enumerate(self.curriculum_stages):
+            self.current_stage = stage_idx
+            self.Re = stage['Re']
+            self.nu = 1.0 / self.Re
+            
+            print(f"\n{'='*80}")
+            print(f"STAGE {stage_idx + 1}/{len(self.curriculum_stages)}: Re = {self.Re}")
+            print(f"{'='*80}\n")
+            
+            epochs = stage['epochs']
+            
+            for epoch in range(epochs):
+                self.optimizer.zero_grad()
+                loss, loss_dict = self.compute_loss()
+                loss.backward()
+                self.optimizer.step()
+                
+                if self.scheduler is not None:
+                    self.scheduler.step()
+                
+                self.loss_history.append(loss.item())
+                self.total_epochs_completed += 1
+                
+                if verbose and ((epoch + 1) % save_interval == 0 or epoch == 0):
+                    lr = self.optimizer.param_groups[0]['lr']
+                    print(f"  Stage {stage_idx+1}, Epoch {epoch+1}/{epochs}, "
+                          f"Re={self.Re}, Loss={loss.item():.6e}, LR={lr:.2e}")
+                    print(f"    " + ", ".join([f"{k}={v:.4e}" for k, v in loss_dict.items()]))
+        
+        print(f"\n{'='*80}")
+        print("CURRICULUM TRAINING COMPLETED")
+        print(f"Total epochs: {self.total_epochs_completed}")
+        print(f"Final Re: {self.Re}")
+        print(f"{'='*80}\n")
