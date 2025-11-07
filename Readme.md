@@ -69,12 +69,24 @@ project_root/
 1. **1D Burgers' Equation 一维伯格斯方程**
    - Challenge: Solution develops shock waves as viscosity ν decreases
    - Curriculum: Linear increase of β from 0 to 1
-   - Implementation: See `burgers.py`
+   - Implementation: See `experiment_burgers.py`
 
 2. **2D Lid-Driven Cavity Flow 二维顶盖驱动流**
    - Challenge: Complex vortex structures at high Reynolds numbers
    - Curriculum: Progressive increase in Reynolds number
-   - Implementation: See `Lid_Cavity_Flow.py`
+   - Implementation: See `experiment_cavity.py`
+
+3. **2D Cylinder Flow 二维圆柱绕流**
+   - Challenge: Complex flow phenomena including:
+     * Vortex shedding and von Kármán vortex street
+     * Flow separation and wake formation
+     * Reynolds number dependent flow regimes
+   - Curriculum: Multi-stage learning strategy increase in Reynolds number
+   - Physics Features:
+     * Incompressible Navier-Stokes equations
+     * No-slip boundary condition on cylinder surface
+     * Far-field uniform flow conditions
+   - Implementation: See `experiment_cylinder.py`
 
 ### Phase 2: Optimization - Adaptive Curriculum Design
 第二阶段：优化研究 - 自适应课程设计
@@ -114,9 +126,21 @@ python -m src.eexperiment_burgers --config with_data
 # Run Cavity flow experiment
 python -m src.experiment_cavity --config low_re --use-data-loss
 python -m src.experiment_cavity --config high_re --output outputs/cavity_high_re
+# 1. 查看所有配置
+from src.configs.cylinder_config import print_all_configs
+print_all_configs()
 
+# 2. 查看详细配置信息
+from src.configs.cylinder_config import print_config_info
+print_config_info('low_re')
+
+# 3. 获取配置
+from src.configs.cylinder_config import get_config
+config = get_config('medium_re')
 # Run Cyliner flow experiment
-python -m src.experiment_cylinder --config low_re --use-data-loss
+python -m src.experiment_cylinder --config low_re --output low_re
+python -m src.experiment_cylinder --config medium_re --output medium_re
+python -m src.experiment_cylinder --config high_re --output high_re
 ```
 
 ### Configuration Examples

@@ -15,7 +15,7 @@ CAVITY_CONFIG = {
     "activation": "tanh",
     
     # Standard PINN training parameters
-    "pinn_epochs": 50000,
+    "pinn_epochs": 80000,
     "pinn_learning_rate": 5e-4,
     "pinn_optimizer": "adam",
     "pinn_use_scheduler": True,
@@ -23,7 +23,7 @@ CAVITY_CONFIG = {
     "pinn_lr_decay_rate": 0.9,
     
     # Curriculum PINN parameters
-    "curriculum_total_epochs": 50000,
+    "curriculum_total_epochs": 80000,
     "curriculum_learning_rate": 5e-4,
     "curriculum_optimizer": "adam",
     "curriculum_use_scheduler": True,
@@ -32,10 +32,10 @@ CAVITY_CONFIG = {
     
     # Curriculum stages
     "curriculum_stages": [
-        {"Re": 10, "epochs": 4000},
-        {"Re": 30, "epochs": 4000},
-        {"Re": 60, "epochs": 4000},
-        {"Re": 100, "epochs": 38000},
+        {"Re": 10, "epochs": 5000},
+        {"Re": 30, "epochs": 5000},
+        {"Re": 60, "epochs": 5000},
+        {"Re": 100, "epochs": 65000},
     ],
     
     # Data points
@@ -77,12 +77,6 @@ CAVITY_WITH_DATA = {
 CAVITY_LOW_RE = {
     **CAVITY_CONFIG,
     "Re_target": 100,
-    "curriculum_stages": [
-        {"Re": 10, "epochs": 4000},
-        {"Re": 30, "epochs": 4000},
-        {"Re": 60, "epochs": 4000},
-        {"Re": 100, "epochs": 38000},
-    ]
 }
 
 

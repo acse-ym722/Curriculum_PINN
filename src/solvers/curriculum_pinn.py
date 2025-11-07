@@ -5,7 +5,7 @@ import torch
 import numpy as np
 import copy
 from .standard_pinn import BurgersPINN, NavierStokesPINN
-
+import time
 
 class CurriculumBurgersPINN(BurgersPINN):
     """
@@ -196,6 +196,8 @@ class CurriculumCylinderPINN(CylinderPINN):
         # Initialize with first stage Reynolds number
         config_copy = config.copy()
         config_copy['Re'] = self.curriculum_stages[0]['Re']
+        # Set epochs to total of all stages
+        config_copy['epochs'] = sum(stage['epochs'] for stage in self.curriculum_stages)
         
         super().__init__(model, config_copy, device)
         
@@ -212,6 +214,8 @@ class CurriculumCylinderPINN(CylinderPINN):
             print(f"  Stage {i+1}: Re = {stage['Re']}, Epochs = {stage['epochs']}")
         print("="*80 + "\n")
         
+        start_time = time.time()
+        
         for stage_idx, stage in enumerate(self.curriculum_stages):
             self.current_stage = stage_idx
             self.Re = stage['Re']
@@ -224,25 +228,37 @@ class CurriculumCylinderPINN(CylinderPINN):
             epochs = stage['epochs']
             
             for epoch in range(epochs):
-                self.optimizer.zero_grad()
-                loss, loss_dict = self.compute_loss()
-                loss.backward()
-                self.optimizer.step()
+                # Use train_step from base class
+                loss, loss_dict = self.train_step()
                 
-                if self.scheduler is not None:
-                    self.scheduler.step()
-                
+                # Store history
                 self.loss_history.append(loss.item())
+                for key, val in loss_dict.items():
+                    if key not in self.loss_components_history:
+                        self.loss_components_history[key] = []
+                    self.loss_components_history[key].append(val)
+                
                 self.total_epochs_completed += 1
                 
                 if verbose and ((epoch + 1) % save_interval == 0 or epoch == 0):
                     lr = self.optimizer.param_groups[0]['lr']
-                    print(f"  Stage {stage_idx+1}, Epoch {epoch+1}/{epochs}, "
-                          f"Re={self.Re}, Loss={loss.item():.6e}, LR={lr:.2e}")
-                    print(f"    " + ", ".join([f"{k}={v:.4e}" for k, v in loss_dict.items()]))
+                    elapsed = time.time() - start_time
+                    
+                    # Build loss string
+                    loss_str_parts = [f"Total = {loss_dict.get('total', loss.item()):.2e}"]
+                    for key in ['bc_inlet', 'bc_outlet', 'bc_wall', 'bc_cylinder', 'pde', 'data']:
+                        if key in loss_dict and loss_dict[key] > 0:
+                            loss_str_parts.append(f"{key.upper()} = {loss_dict[key]:.2e}")
+                    
+                    loss_str = ", ".join(loss_str_parts)
+                    
+                    print(f"  Stage {stage_idx+1} | Epoch {epoch+1:4d}/{epochs} | "
+                          f"Re={self.Re} | {loss_str} | LR={lr:.2e} | Time={elapsed:.1f}s")
         
+        total_time = time.time() - start_time
         print(f"\n{'='*80}")
         print("CURRICULUM TRAINING COMPLETED")
         print(f"Total epochs: {self.total_epochs_completed}")
         print(f"Final Re: {self.Re}")
+        print(f"Total time: {total_time:.1f}s")
         print(f"{'='*80}\n")

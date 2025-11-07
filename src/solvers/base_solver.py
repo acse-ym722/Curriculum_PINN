@@ -30,6 +30,10 @@ class BasePINNSolver(ABC):
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.model.to(self.device)
         
+        # Training parameters - ADD THESE
+        self.epochs = config.get('epochs', 10000)
+        self.learning_rate = config.get('learning_rate', 1e-3)
+        
         # Training history
         self.loss_history = []
         self.loss_components_history = {
@@ -56,7 +60,7 @@ class BasePINNSolver(ABC):
     
     def _setup_optimizer(self):
         """Setup optimizer and learning rate scheduler"""
-        lr = self.config.get('learning_rate', 1e-3)
+        lr = self.learning_rate  # Use self.learning_rate instead of config.get
         
         optimizer_type = self.config.get('optimizer', 'adam').lower()
         if optimizer_type == 'adam':
@@ -180,61 +184,56 @@ class BasePINNSolver(ABC):
         
         return loss, loss_dict
     
-    def train(self, epochs=None, verbose=True, save_interval=1000):
-        """
-        Train the PINN model
-        
-        Args:
-            epochs: Number of training epochs
-            verbose: Whether to print training progress
-            save_interval: Interval for printing progress
-        """
-        if epochs is None:
-            epochs = self.config.get('epochs', 10000)
-        
-        if verbose:
-            print(f"\n{'='*80}")
-            print(f"Training {self.__class__.__name__}")
-            print(f"{'='*80}")
-            print(f"Device: {self.device}")
-            print(f"Epochs: {epochs}")
-            print(f"Optimizer: {self.optimizer.__class__.__name__}")
-            print(f"-"*80)
+    def train(self, verbose=True, save_interval=1000):
+        """Train the PINN model"""
+        print("\n" + "="*80)
+        print(f"Training {self.__class__.__name__}")
+        print("="*80)
+        print(f"Device: {self.device}")
+        print(f"Epochs: {self.epochs}")
+        print(f"Optimizer: {self.optimizer.__class__.__name__}")
+        if self.scheduler is not None:
+            print(f"LR Scheduler: {self.scheduler.__class__.__name__}")
+        print("-"*80)
         
         start_time = time.time()
         
-        for epoch in range(epochs):
+        for epoch in range(self.epochs):
+            # Compute loss
             loss, loss_dict = self.train_step()
             
-            # Record history
+            # Store history
             self.loss_history.append(loss.item())
-            for key, value in loss_dict.items():
-                self.loss_components_history[key].append(value)
+            for key, val in loss_dict.items():
+                if key not in self.loss_components_history:
+                    self.loss_components_history[key] = []
+                self.loss_components_history[key].append(val)
             
             # Print progress
-            if verbose and (epoch + 1) % save_interval == 0:
+            if verbose and (epoch % 100 == 0 or epoch == self.epochs - 1):
+                current_lr = self.optimizer.param_groups[0]['lr']
                 elapsed = time.time() - start_time
-                lr = self.optimizer.param_groups[0]['lr']
                 
-                # 构建打印信息
-                log_msg = (f"Epoch {epoch+1:6d}/{epochs}: "
-                        f"Loss = {loss_dict['total']:.4e}, "
-                        f"IC = {loss_dict['ic']:.2e}, "
-                        f"BC = {loss_dict['bc']:.2e}, "
-                        f"PDE = {loss_dict['pde']:.2e}")
+                # Build loss string dynamically
+                loss_str_parts = [f"Total = {loss_dict.get('total', loss.item()):.2e}"]
                 
-                # 如果使用了 data loss，添加到日志中
-                if self.config.get('use_data_loss', False):
-                    log_msg += f", Data = {loss_dict['data']:.2e}"
+                # Define order for pretty printing
+                display_keys = ['ic', 'bc', 'bc_inlet', 'bc_outlet', 'bc_wall', 
+                               'bc_cylinder', 'pde', 'continuity', 'data']
                 
-                log_msg += f", LR = {lr:.2e}, Time = {elapsed:.1f}s"
-                print(log_msg)
+                for key in display_keys:
+                    if key in loss_dict and loss_dict[key] > 0:
+                        label = key.replace('_', ' ').title()
+                        loss_str_parts.append(f"{label} = {loss_dict[key]:.2e}")
+                
+                loss_str = ", ".join(loss_str_parts)
+                
+                print(f"Epoch {epoch:5d}/{self.epochs} | {loss_str} | LR = {current_lr:.2e} | Time = {elapsed:.1f}s")
         
-        elapsed = time.time() - start_time
-        if verbose:
-            print(f"-"*80)
-            print(f"✓ Training completed in {elapsed:.1f}s")
-            print(f"{'='*80}\n")
+        total_time = time.time() - start_time
+        print("-"*80)
+        print(f"✓ Training completed in {total_time:.1f}s")
+        print("="*80 + "\n")
     
     def predict(self, X):
         """
@@ -264,6 +263,7 @@ class BasePINNSolver(ABC):
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'loss_history': self.loss_history,
+            'loss_components_history': self.loss_components_history,
             'config': self.config
         }, filepath)
         print(f"✓ Model saved to {filepath}")
@@ -274,4 +274,9 @@ class BasePINNSolver(ABC):
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.loss_history = checkpoint['loss_history']
+        self.loss_components_history = checkpoint.get('loss_components_history', {})
         print(f"✓ Model loaded from {filepath}")
+    
+    def save_checkpoint(self, epoch):
+        """Save training checkpoint (can be overridden by subclasses)"""
+        pass

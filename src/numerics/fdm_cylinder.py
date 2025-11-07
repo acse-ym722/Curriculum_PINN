@@ -5,7 +5,8 @@ import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
 import time
-
+import os
+import pickle
 
 class CylinderFDM:
     """
@@ -16,7 +17,7 @@ class CylinderFDM:
     def __init__(self, Re, U_inf=1.0, cylinder_center=(0.0, 0.0), 
                  cylinder_radius=0.5, nx=200, ny=100, 
                  x_domain=(-5.0, 15.0), y_domain=(-5.0, 5.0),
-                 dt=0.001, max_iter=20000, tol=1e-6):
+                 dt=0.001, max_iter=20000, tol=1e-6, config=None):
         """Initialize FDM solver for cylinder flow"""
         self.Re = Re
         self.nu = U_inf * 2 * cylinder_radius / Re  # ν = U∞ * D / Re
@@ -58,7 +59,9 @@ class CylinderFDM:
         self.convergence_history = []
         self.actual_iterations = 0
         self.final_time = 0.0
-        
+
+        self.config = config
+
         # Identify cylinder points
         self._identify_cylinder_region()
         self._initialize_flow()
@@ -113,18 +116,60 @@ class CylinderFDM:
         print(f"  Fluid points:    {n_fluid} ({100*n_fluid/(self.nx*self.ny):.1f}%)")
     
     def _initialize_flow(self):
-        """Initialize flow field with free stream"""
-        self.u[:, :] = self.U_inf
-        self.v[:, :] = 0.0
+        """Initialize flow field using config"""
+        if self.config is None:
+            # 默认行为：均匀流
+            self.u[:, :] = self.U_inf
+            self.v[:, :] = 0.0
+            for i in range(self.ny):
+                self.psi[i, :] = self.U_inf * (self.y[i] - self.y_min)
+        else:
+            # 从配置读取初始条件类型
+            ic_type = self.config.get('initial_condition_type', 'uniform')
+            ic_config = self.config['initial_conditions'][ic_type]
+            
+            if ic_type == 'uniform':
+                self.u[:, :] = self.U_inf
+                self.v[:, :] = 0.0
+                for i in range(self.ny):
+                    self.psi[i, :] = self.U_inf * (self.y[i] - self.y_min)
+            
+            elif ic_type == 'potential_flow':
+                # 使用圆柱势流解
+                print("Initializing with potential flow solution...")
+                for i in range(self.ny):
+                    for j in range(self.nx):
+                        x = self.x[j] - self.cx
+                        y = self.y[i] - self.cy
+                        r = np.sqrt(x**2 + y**2)
+                        
+                        if r > self.radius:
+                            # 势流解
+                            cos_theta = x / r if r > 0 else 0
+                            sin_theta = y / r if r > 0 else 0
+                            
+                            # u = U∞(1 - R²/r² * (1 - 2sin²θ))
+                            self.u[i, j] = self.U_inf * (1 - self.radius**2 / r**2 * (1 - 2 * sin_theta**2))
+                            # v = -U∞ * R²/r² * 2cosθ sinθ
+                            self.v[i, j] = -self.U_inf * self.radius**2 / r**2 * 2 * cos_theta * sin_theta
+                            # ψ = U∞(r - R²/r) sinθ
+                            self.psi[i, j] = self.U_inf * (r - self.radius**2 / r) * sin_theta
+                        else:
+                            # 圆柱内部
+                            self.u[i, j] = 0.0
+                            self.v[i, j] = 0.0
+                            self.psi[i, j] = 0.0
+            
+            elif ic_type == 'zero':
+                self.u[:, :] = 0.0
+                self.v[:, :] = 0.0
+                self.psi[:, :] = 0.0
         
-        # Set zero velocity inside cylinder
+        # 强制圆柱内部为零
         self.u[self.is_cylinder] = 0.0
         self.v[self.is_cylinder] = 0.0
-        
-        # Initialize stream function
-        for i in range(self.ny):
-            self.psi[i, :] = self.U_inf * (self.y[i] - self.y_min)
-    
+        self.omega[self.is_cylinder] = 0.0
+
     def _check_stability(self):
         """Check CFL stability conditions"""
         print("\n" + "-"*70)
@@ -478,3 +523,100 @@ class CylinderFDM:
         p_vals = p_interp(points)
         
         return u_vals, v_vals, p_vals
+
+    def save_solution(self, filepath):
+        """Save FDM solution to file"""
+        solution_data = {
+            'u': self.u,
+            'v': self.v,
+            'p': self.p,
+            'psi': self.psi,
+            'omega': self.omega,
+            'x': self.x,
+            'y': self.y,
+            'X': self.X,
+            'Y': self.Y,
+            'Re': self.Re,
+            'U_inf': self.U_inf,
+            'cx': self.cx,
+            'cy': self.cy,
+            'radius': self.radius,
+            'convergence_history': self.convergence_history,
+            'actual_iterations': self.actual_iterations,
+            'final_time': self.final_time,
+        }
+        
+        # 如果有 drag/lift 系数
+        if hasattr(self, 'Cd'):
+            solution_data['Cd'] = self.Cd
+            solution_data['Cl'] = self.Cl
+            solution_data['Cd_pressure'] = self.Cd_pressure
+            solution_data['Cd_viscous'] = self.Cd_viscous
+        
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'wb') as f:
+            pickle.dump(solution_data, f)
+        
+        print(f"✓ FDM solution saved to {filepath}")
+    
+    @classmethod
+    def load_solution(cls, filepath, config):
+        """
+        Load FDM solution from file
+        
+        Args:
+            filepath: Path to saved solution
+            config: Configuration dict (for initialization)
+        
+        Returns:
+            CylinderFDM instance with loaded solution
+        """
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"FDM solution file not found: {filepath}")
+        
+        print(f"Loading FDM solution from {filepath}...")
+        
+        # Create instance (without solving)
+        solver = cls(
+            Re=config['Re_target'],
+            U_inf=config['U_inf'],
+            cylinder_center=config['cylinder_center'],
+            cylinder_radius=config['cylinder_radius'],
+            nx=config['fdm_nx'],
+            ny=config['fdm_ny'],
+            x_domain=config['x_domain'],
+            y_domain=config['y_domain'],
+            dt=config['fdm_dt'],
+            max_iter=config['fdm_max_iter'],
+            tol=config['fdm_tolerance'],
+            config=config
+        )
+        
+        # Load solution data
+        with open(filepath, 'rb') as f:
+            solution_data = pickle.load(f)
+        
+        # Restore solution
+        solver.u = solution_data['u']
+        solver.v = solution_data['v']
+        solver.p = solution_data['p']
+        solver.psi = solution_data['psi']
+        solver.omega = solution_data['omega']
+        solver.convergence_history = solution_data['convergence_history']
+        solver.actual_iterations = solution_data['actual_iterations']
+        solver.final_time = solution_data['final_time']
+        
+        # Restore drag/lift if available
+        if 'Cd' in solution_data:
+            solver.Cd = solution_data['Cd']
+            solver.Cl = solution_data['Cl']
+            solver.Cd_pressure = solution_data['Cd_pressure']
+            solver.Cd_viscous = solution_data['Cd_viscous']
+        
+        print(f"✓ FDM solution loaded successfully")
+        print(f"  Iterations: {solver.actual_iterations}")
+        print(f"  Final time: {solver.final_time:.6f} s")
+        if hasattr(solver, 'Cd'):
+            print(f"  Cd = {solver.Cd:.6f}, Cl = {solver.Cl:.6f}")
+        
+        return solver

@@ -156,6 +156,7 @@ class BurgersPINN(BasePINNSolver):
         
         return residual
 
+
 class NavierStokesPINN(BasePINNSolver):
     """
     Standard PINN solver for 2D Navier-Stokes Equations (Lid-Driven Cavity):
@@ -452,115 +453,76 @@ class CylinderPINN(BasePINNSolver):
         self._generate_training_data()
     
     def _generate_training_data(self):
-        """Generate training points"""
+        """Generate training points using config"""
         x_min, x_max = self.x_domain
         y_min, y_max = self.y_domain
         
-        # Inlet boundary (left)
+        # 从配置读取边界条件
+        bc_config = self.config.get('boundary_conditions', {})
+        
+        # ========== 入口边界 (Inlet) ==========
+        inlet_bc = bc_config.get('inlet', {})
         N_inlet = self.config.get('N_bc_inlet', 500)
+        
         y_inlet = np.random.uniform(y_min, y_max, N_inlet)
         x_inlet = np.full(N_inlet, x_min)
         self.X_bc_inlet = torch.tensor(np.stack([x_inlet, y_inlet], axis=1), 
-                                       dtype=torch.float32, device=self.device)
-        self.U_bc_inlet = torch.tensor([[self.U_inf, 0.0, 0.0]] * N_inlet,
-                                       dtype=torch.float32, device=self.device)
+                                    dtype=torch.float32, device=self.device)
         
-        # Outlet boundary (right)
+        # 从配置读取边界值
+        u_inlet = self.U_inf if inlet_bc.get('u') == 'U_inf' else inlet_bc.get('u', self.U_inf)
+        v_inlet = inlet_bc.get('v', 0.0)
+        p_inlet = inlet_bc.get('p', 0.0)
+        
+        self.U_bc_inlet = torch.tensor([[u_inlet, v_inlet, p_inlet]] * N_inlet,
+                                    dtype=torch.float32, device=self.device)
+        
+        # ========== 出口边界 (Outlet) - 零梯度 ==========
+        outlet_bc = bc_config.get('outlet', {})
         N_outlet = self.config.get('N_bc_outlet', 500)
+        
         y_outlet = np.random.uniform(y_min, y_max, N_outlet)
         x_outlet = np.full(N_outlet, x_max)
         self.X_bc_outlet = torch.tensor(np.stack([x_outlet, y_outlet], axis=1),
                                         dtype=torch.float32, device=self.device)
+        # 出口不强制值，只在loss中处理梯度
         
-        # Top/Bottom walls
+        # ========== 上下壁面 (Walls) - 滑移边界 ==========
+        wall_bc = bc_config.get('walls', {})
         N_wall = self.config.get('N_bc_wall', 200)
+        
         x_top = np.random.uniform(x_min, x_max, N_wall)
         x_bot = np.random.uniform(x_min, x_max, N_wall)
         y_top = np.full(N_wall, y_max)
         y_bot = np.full(N_wall, y_min)
+        
         self.X_bc_wall = torch.tensor(
             np.concatenate([np.stack([x_top, y_top], axis=1),
-                           np.stack([x_bot, y_bot], axis=1)]),
+                        np.stack([x_bot, y_bot], axis=1)]),
             dtype=torch.float32, device=self.device)
-        self.U_bc_wall = torch.tensor([[self.U_inf, 0.0, 0.0]] * (2 * N_wall),
-                                      dtype=torch.float32, device=self.device)
         
-        # Cylinder surface
+        u_wall = self.U_inf if wall_bc.get('u') == 'U_inf' else wall_bc.get('u', self.U_inf)
+        v_wall = wall_bc.get('v', 0.0)
+        
+        self.U_bc_wall = torch.tensor([[u_wall, v_wall, 0.0]] * (2 * N_wall),
+                                    dtype=torch.float32, device=self.device)
+        
+        # ========== 圆柱表面 (Cylinder) - 无滑移 ==========
+        cyl_bc = bc_config.get('cylinder', {})
         N_cyl = self.config.get('N_bc_cylinder', 800)
+        
         theta = np.linspace(0, 2*np.pi, N_cyl)
         x_cyl = self.cx + self.radius * np.cos(theta)
         y_cyl = self.cy + self.radius * np.sin(theta)
+        
         self.X_bc_cylinder = torch.tensor(np.stack([x_cyl, y_cyl], axis=1),
-                                         dtype=torch.float32, device=self.device)
-        self.U_bc_cylinder = torch.zeros((N_cyl, 3), dtype=torch.float32, device=self.device)
+                                        dtype=torch.float32, device=self.device)
         
-        # PDE collocation points (excluding cylinder interior)
-        N_pde = self.config.get('N_pde', 20000)
-        x_pde = []
-        y_pde = []
-        n_generated = 0
+        u_cyl = cyl_bc.get('u', 0.0)
+        v_cyl = cyl_bc.get('v', 0.0)
         
-        while n_generated < N_pde:
-            x_cand = np.random.uniform(x_min, x_max, N_pde * 2)
-            y_cand = np.random.uniform(y_min, y_max, N_pde * 2)
-            
-            # Filter out points inside cylinder
-            dist = np.sqrt((x_cand - self.cx)**2 + (y_cand - self.cy)**2)
-            valid = dist > self.radius
-            
-            x_pde.extend(x_cand[valid])
-            y_pde.extend(y_cand[valid])
-            n_generated = len(x_pde)
-        
-        x_pde = np.array(x_pde[:N_pde])
-        y_pde = np.array(y_pde[:N_pde])
-        self.X_pde = torch.tensor(np.stack([x_pde, y_pde], axis=1),
-                                 dtype=torch.float32, device=self.device, requires_grad=True)
-        
-        # ========== Data points (从FDM采样) ==========
-        if self.config.get('use_data_loss', False):
-            N_data = self.config.get('N_data', 1000)
-            fdm_solver = self.config.get('fdm_solver', None)
-            
-            if fdm_solver is not None:
-                print(f"Loading {N_data} data points from FDM solution...")
-                
-                # 随机采样空间点（排除圆柱内部）
-                x_data_list = []
-                y_data_list = []
-                n_sampled = 0
-                
-                while n_sampled < N_data:
-                    x_cand = np.random.uniform(x_min, x_max, N_data * 2)
-                    y_cand = np.random.uniform(y_min, y_max, N_data * 2)
-                    
-                    # 排除圆柱内部
-                    dist = np.sqrt((x_cand - self.cx)**2 + (y_cand - self.cy)**2)
-                    valid = dist > self.radius
-                    
-                    x_data_list.extend(x_cand[valid])
-                    y_data_list.extend(y_cand[valid])
-                    n_sampled = len(x_data_list)
-                
-                x_data = np.array(x_data_list[:N_data]).reshape(-1, 1)
-                y_data = np.array(y_data_list[:N_data]).reshape(-1, 1)
-                
-                self.X_data = torch.cat([
-                    torch.tensor(x_data, dtype=torch.float32),
-                    torch.tensor(y_data, dtype=torch.float32)
-                ], dim=1).to(self.device)
-                
-                # 从FDM插值得到对应的 [u, v, p] 值
-                self.u_data = self._interpolate_fdm_data(x_data, y_data, fdm_solver)
-                
-                print(f"✓ Generated {N_data} data points from FDM solution")
-            else:
-                print("⚠ Warning: use_data_loss=True but no fdm_solver provided")
-                self.X_data = None
-                self.u_data = None
-        else:
-            self.X_data = None
-            self.u_data = None
+        self.U_bc_cylinder = torch.tensor([[u_cyl, v_cyl, 0.0]] * N_cyl,
+                                        dtype=torch.float32, device=self.device)
     
     def _interpolate_fdm_data(self, x_query, y_query, fdm_solver):
         """
@@ -676,9 +638,9 @@ class CylinderPINN(BasePINNSolver):
         pred_inlet = self.model(self.X_bc_inlet)
         loss_inlet = torch.mean((pred_inlet - self.U_bc_inlet)**2)
         
-        # Outlet BC loss (zero gradient approximation)
+        # Outlet BC loss
         pred_outlet = self.model(self.X_bc_outlet)
-        loss_outlet = torch.mean(pred_outlet[:, 0:1]**2)  # 简化为0损失，或者可以不计算
+        loss_outlet = torch.mean(pred_outlet[:, 0:1]**2)
         
         # Wall BC loss
         pred_wall = self.model(self.X_bc_wall)
@@ -689,7 +651,7 @@ class CylinderPINN(BasePINNSolver):
         loss_cyl = torch.mean((pred_cyl - self.U_bc_cylinder)**2)
         
         # PDE residual loss
-        loss_pde = self.loss_pde()
+        loss_pde_val = self.loss_pde()
         
         # Data loss
         loss_data_val = self.loss_data()
@@ -706,13 +668,17 @@ class CylinderPINN(BasePINNSolver):
                     lambda_outlet * loss_outlet +
                     lambda_wall * loss_wall +
                     lambda_cyl * loss_cyl +
-                    lambda_pde * loss_pde +
+                    lambda_pde * loss_pde_val +
                     lambda_data * loss_data_val)
         
-        # 只返回 total 和 pde，不返回其他 boundary loss components
+        # Return detailed loss dict for monitoring
         loss_dict = {
             'total': total_loss.item(),
-            'pde': loss_pde.item(),
+            'bc_inlet': loss_inlet.item(),
+            'bc_outlet': loss_outlet.item(),
+            'bc_wall': loss_wall.item(),
+            'bc_cylinder': loss_cyl.item(),
+            'pde': loss_pde_val.item(),
             'data': loss_data_val.item()
         }
         
