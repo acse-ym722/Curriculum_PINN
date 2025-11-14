@@ -683,3 +683,496 @@ class CylinderPINN(BasePINNSolver):
         }
         
         return total_loss, loss_dict
+
+
+class WavePINN(BasePINNSolver):
+    """
+    Standard PINN solver for 1D Wave Equation:
+    u_tt = c^2 * u_xx
+    
+    Initial conditions:
+    u(x, 0) = sin(k*pi*x)
+    u_t(x, 0) = 0
+    
+    Boundary conditions:
+    u(0, t) = 0
+    u(1, t) = 0
+    """
+    
+    def __init__(self, model, config, device='cuda'):
+        self.c = config.get('c', 1.0)
+        self.k = config.get('k', 1)
+        super().__init__(model, config, device)
+        self._generate_training_data()
+    
+    def _generate_training_data(self):
+        """Generate training data for Wave equation"""
+        x_domain = self.config.get('x_domain', [0.0, 1.0])
+        t_domain = self.config.get('t_domain', [0.0, 2.0])
+        
+        N_ic = self.config.get('N_ic', 200)
+        N_bc = self.config.get('N_bc', 200)
+        N_pde = self.config.get('N_pde', 10000)
+        
+        # ========== Initial conditions (t=0) ==========
+        # u(x, 0) = sin(k*pi*x)
+        x_ic = torch.linspace(x_domain[0], x_domain[1], N_ic).view(-1, 1)
+        t_ic = torch.zeros_like(x_ic)
+        self.X_ic = torch.cat([x_ic, t_ic], dim=1).to(self.device)
+        self.u_ic = torch.sin(self.k * np.pi * x_ic).to(self.device)
+        
+        # u_t(x, 0) = 0 (需要单独处理)
+        self.X_ic_t = self.X_ic.clone()
+        self.X_ic_t.requires_grad = True
+        
+        # ========== Boundary conditions ==========
+        t_bc = torch.linspace(t_domain[0], t_domain[1], N_bc).view(-1, 1)
+        x_bc_left = torch.full_like(t_bc, x_domain[0])
+        x_bc_right = torch.full_like(t_bc, x_domain[1])
+        
+        X_bc_left = torch.cat([x_bc_left, t_bc], dim=1)
+        X_bc_right = torch.cat([x_bc_right, t_bc], dim=1)
+        self.X_bc = torch.cat([X_bc_left, X_bc_right], dim=0).to(self.device)
+        self.u_bc = torch.zeros(2 * N_bc, 1).to(self.device)
+        
+        # ========== PDE collocation points ==========
+        x_pde = torch.rand(N_pde, 1) * (x_domain[1] - x_domain[0]) + x_domain[0]
+        t_pde = torch.rand(N_pde, 1) * (t_domain[1] - t_domain[0]) + t_domain[0]
+        self.X_pde = torch.cat([x_pde, t_pde], dim=1).to(self.device)
+        self.X_pde.requires_grad = True
+        
+        # ========== Data points ==========
+        if self.config.get('use_data_loss', False):
+            N_data = self.config.get('N_data', 500)
+            fdm_solution = self.config.get('fdm_solution', None)
+            
+            if fdm_solution is not None:
+                print(f"Loading {N_data} data points from FDM solution...")
+                
+                x_data = torch.rand(N_data, 1) * (x_domain[1] - x_domain[0]) + x_domain[0]
+                t_data = torch.rand(N_data, 1) * (t_domain[1] - t_domain[0]) + t_domain[0]
+                self.X_data = torch.cat([x_data, t_data], dim=1).to(self.device)
+                
+                self.u_data = self._interpolate_fdm_data(
+                    x_data.cpu().numpy(),
+                    t_data.cpu().numpy(),
+                    fdm_solution
+                )
+                
+                print(f"✓ Generated {N_data} data points from FDM solution")
+            else:
+                self.X_data = None
+                self.u_data = None
+        else:
+            self.X_data = None
+            self.u_data = None
+    
+    def _interpolate_fdm_data(self, x_query, t_query, fdm_solution):
+        """Interpolate FDM data"""
+        from scipy.interpolate import RegularGridInterpolator
+        
+        u_grid, x_grid, t_grid = fdm_solution
+        
+        interpolator = RegularGridInterpolator(
+            (x_grid, t_grid),
+            u_grid,
+            method='linear',
+            bounds_error=False,
+            fill_value=0.0
+        )
+        
+        points = np.concatenate([x_query, t_query], axis=1)
+        u_interp = interpolator(points)
+        
+        return torch.tensor(u_interp, dtype=torch.float32).reshape(-1, 1).to(self.device)
+    
+    def loss_ic(self):
+        """Override IC loss to include both u and u_t"""
+        # u(x, 0) loss
+        u_pred = self.model(self.X_ic)
+        loss_u = torch.mean((u_pred - self.u_ic) ** 2)
+        
+        # u_t(x, 0) = 0 loss
+        u_pred_t = self.model(self.X_ic_t)
+        
+        grad_u = torch.autograd.grad(
+            outputs=u_pred_t,
+            inputs=self.X_ic_t,
+            grad_outputs=torch.ones_like(u_pred_t),
+            create_graph=True,
+            retain_graph=True
+        )[0]
+        
+        u_t = grad_u[:, 1:2]  # du/dt
+        loss_u_t = torch.mean(u_t ** 2)
+        
+        lambda_ic_t = self.config.get('lambda_ic_t', 1.0)
+        
+        return loss_u + lambda_ic_t * loss_u_t
+    
+    def pde_residual(self, X):
+        """
+        Compute PDE residual: f = u_tt - c^2 * u_xx
+        """
+        if not X.requires_grad:
+            X = X.clone().detach().requires_grad_(True)
+        
+        # Forward pass
+        u = self.model(X)
+        
+        # First derivatives
+        grad_u = torch.autograd.grad(
+            outputs=u,
+            inputs=X,
+            grad_outputs=torch.ones_like(u),
+            create_graph=True,
+            retain_graph=True
+        )[0]
+        
+        u_x = grad_u[:, 0:1]
+        u_t = grad_u[:, 1:2]
+        
+        # Second derivatives
+        u_xx = torch.autograd.grad(
+            outputs=u_x,
+            inputs=X,
+            grad_outputs=torch.ones_like(u_x),
+            create_graph=True,
+            retain_graph=True
+        )[0][:, 0:1]
+        
+        u_tt = torch.autograd.grad(
+            outputs=u_t,
+            inputs=X,
+            grad_outputs=torch.ones_like(u_t),
+            create_graph=True,
+            retain_graph=True
+        )[0][:, 1:2]
+        
+        # PDE residual: u_tt - c^2 * u_xx = 0
+        residual = u_tt - (self.c ** 2) * u_xx
+        
+        return residual
+    
+
+class WavePINN2D(BasePINNSolver):
+    """
+    Standard PINN solver for 2D Wave Equation:
+    u_tt = c^2 * (u_xx + u_yy)
+    
+    Initial conditions:
+    u(x, y, 0) = sin(kx*pi*x) * sin(ky*pi*y)
+    u_t(x, y, 0) = 0
+    
+    Boundary conditions:
+    u = 0 on all boundaries.
+    """
+    
+    def __init__(self, model, config, device='cuda'):
+        self.c = config.get('c', 1.0)
+        self.kx = config.get('kx', 1)
+        self.ky = config.get('ky', 1)
+        # 从config中获取总epochs，以供标准PINN使用
+        # 对于课程学习，总epochs将在其类中计算
+        if 'curriculum_stages' in config:
+            self.epochs = sum(stage['epochs'] for stage in config['curriculum_stages'])
+        else:
+            self.epochs = config.get('epochs', 20000)
+            
+        super().__init__(model, config, device)
+        self._generate_training_data()
+    
+    def _generate_training_data(self):
+        """Generate training data for 2D Wave equation"""
+        x_domain = self.config.get('x_domain', [0.0, 1.0])
+        y_domain = self.config.get('y_domain', [0.0, 1.0])
+        t_domain = self.config.get('t_domain', [0.0, 1.0])
+        
+        N_ic = self.config.get('N_ic', 500)
+        N_bc = self.config.get('N_bc', 1000) # Total for all boundaries
+        N_pde = self.config.get('N_pde', 20000)
+        
+        # ========== Initial conditions (t=0) ==========
+        # u(x, y, 0) = sin(kx*pi*x) * sin(ky*pi*y)
+        ic_pts = torch.rand(N_ic, 2)
+        x_ic = ic_pts[:, 0:1] * (x_domain[1] - x_domain[0]) + x_domain[0]
+        y_ic = ic_pts[:, 1:2] * (y_domain[1] - y_domain[0]) + y_domain[0]
+        t_ic = torch.zeros_like(x_ic)
+        
+        self.X_ic = torch.cat([x_ic, y_ic, t_ic], dim=1).to(self.device)
+        self.u_ic = (torch.sin(self.kx * np.pi * x_ic) * 
+                     torch.sin(self.ky * np.pi * y_ic)).to(self.device)
+        
+        # For u_t(x, y, 0) = 0
+        self.X_ic_t = self.X_ic.clone().detach().requires_grad_(True)
+        
+        # ========== Boundary conditions (u=0 on all boundaries) ==========
+        N_bc_each = N_bc // 4
+        
+        # Time points for BC
+        t_bc = torch.rand(N_bc, 1) * (t_domain[1] - t_domain[0]) + t_domain[0]
+        
+        # Left/Right boundaries (x=x_min, x=x_max)
+        x_lr = torch.cat([torch.full((N_bc_each, 1), x_domain[0]), 
+                          torch.full((N_bc_each, 1), x_domain[1])])
+        y_lr = torch.rand(2 * N_bc_each, 1) * (y_domain[1] - y_domain[0]) + y_domain[0]
+        X_bc_lr = torch.cat([x_lr, y_lr, t_bc[:2*N_bc_each]], dim=1)
+
+        # Bottom/Top boundaries (y=y_min, y=y_max)
+        x_bt = torch.rand(2 * N_bc_each, 1) * (x_domain[1] - x_domain[0]) + x_domain[0]
+        y_bt = torch.cat([torch.full((N_bc_each, 1), y_domain[0]), 
+                          torch.full((N_bc_each, 1), y_domain[1])])
+        X_bc_bt = torch.cat([x_bt, y_bt, t_bc[2*N_bc_each:]], dim=1)
+
+        self.X_bc = torch.cat([X_bc_lr, X_bc_bt], dim=0).to(self.device)
+        self.u_bc = torch.zeros(self.X_bc.shape[0], 1).to(self.device)
+        
+        # ========== PDE collocation points ==========
+        pde_pts = torch.rand(N_pde, 3)
+        x_pde = pde_pts[:, 0:1] * (x_domain[1] - x_domain[0]) + x_domain[0]
+        y_pde = pde_pts[:, 1:2] * (y_domain[1] - y_domain[0]) + y_domain[0]
+        t_pde = pde_pts[:, 2:3] * (t_domain[1] - t_domain[0]) + t_domain[0]
+        self.X_pde = torch.cat([x_pde, y_pde, t_pde], dim=1).to(self.device)
+        self.X_pde.requires_grad = True
+
+    def loss_ic(self):
+        """Override IC loss to include both u and u_t for 2D."""
+        # u(x, y, 0) loss
+        u_pred = self.model(self.X_ic)
+        loss_u = torch.mean((u_pred - self.u_ic) ** 2)
+        
+        # u_t(x, y, 0) = 0 loss
+        u_pred_t = self.model(self.X_ic_t)
+        
+        grad_u = torch.autograd.grad(
+            outputs=u_pred_t,
+            inputs=self.X_ic_t,
+            grad_outputs=torch.ones_like(u_pred_t),
+            create_graph=True,
+            retain_graph=True
+        )[0]
+        
+        u_t = grad_u[:, 2:3]  # du/dt, the third component
+        loss_u_t = torch.mean(u_t ** 2)
+        
+        lambda_ic_t = self.config.get('lambda_ic_t', 1.0)
+        
+        # Combine losses and return
+        self.loss_components_history['ic_u'] = loss_u.item()
+        self.loss_components_history['ic_t'] = loss_u_t.item()
+        
+        return loss_u + lambda_ic_t * loss_u_t
+
+    def pde_residual(self, X):
+        """
+        Compute PDE residual: f = u_tt - c^2 * (u_xx + u_yy)
+        """
+        if not X.requires_grad:
+            X = X.clone().detach().requires_grad_(True)
+        
+        u = self.model(X)
+        
+        # First derivatives
+        grad_u = torch.autograd.grad(u, X, torch.ones_like(u), create_graph=True)[0]
+        u_x = grad_u[:, 0:1]
+        u_y = grad_u[:, 1:2]
+        u_t = grad_u[:, 2:3]
+        
+        # Second derivatives
+        u_xx = torch.autograd.grad(u_x, X, torch.ones_like(u_x), create_graph=True)[0][:, 0:1]
+        u_yy = torch.autograd.grad(u_y, X, torch.ones_like(u_y), create_graph=True)[0][:, 1:2]
+        u_tt = torch.autograd.grad(u_t, X, torch.ones_like(u_t), create_graph=True)[0][:, 2:3]
+        
+        # PDE residual
+        residual = u_tt - (self.c ** 2) * (u_xx + u_yy)
+        
+        return residual
+
+
+class DarcyPINN(BasePINNSolver):
+    """
+    Standard PINN solver for 2D Darcy Flow:
+    -∇·(K∇p) = f
+    
+    Expanded: -K * (∂²p/∂x² + ∂²p/∂y²) = f
+    """
+    
+    def __init__(self, model, config, device='cuda'):
+        self.K = config.get('K', 1.0)
+        self.f_source = config.get('f_source_torch', None)  # PyTorch函数
+        super().__init__(model, config, device)
+        self._generate_training_data()
+    
+    def _generate_training_data(self):
+        """Generate training data for Darcy equation"""
+        x_domain = self.config.get('x_domain', [0.0, 1.0])
+        y_domain = self.config.get('y_domain', [0.0, 0.5])
+        
+        N_col = self.config.get('N_collocation', 2000)
+        N_bc = self.config.get('N_bc', 400)
+        
+        # ========== Interior collocation points ==========
+        x_col = torch.rand(N_col, 1) * (x_domain[1] - x_domain[0]) + x_domain[0]
+        y_col = torch.rand(N_col, 1) * (y_domain[1] - y_domain[0]) + y_domain[0]
+        self.X_pde = torch.cat([x_col, y_col], dim=1).to(self.device)
+        self.X_pde.requires_grad = True
+        
+        # ========== Boundary conditions (全Dirichlet) ==========
+        # Left boundary (x=0)
+        x_bc_left = torch.zeros(N_bc, 1)
+        y_bc_left = torch.rand(N_bc, 1) * (y_domain[1] - y_domain[0]) + y_domain[0]
+        X_bc_left = torch.cat([x_bc_left, y_bc_left], dim=1)
+        p_bc_left = torch.full((N_bc, 1), self.config.get('bc_left', 0.0))
+        
+        # Right boundary (x=1)
+        x_bc_right = torch.ones(N_bc, 1) * x_domain[1]
+        y_bc_right = torch.rand(N_bc, 1) * (y_domain[1] - y_domain[0]) + y_domain[0]
+        X_bc_right = torch.cat([x_bc_right, y_bc_right], dim=1)
+        p_bc_right = torch.full((N_bc, 1), self.config.get('bc_right', 0.0))
+        
+        # Bottom boundary (y=0)
+        x_bc_bottom = torch.rand(N_bc, 1) * (x_domain[1] - x_domain[0]) + x_domain[0]
+        y_bc_bottom = torch.zeros(N_bc, 1)
+        X_bc_bottom = torch.cat([x_bc_bottom, y_bc_bottom], dim=1)
+        p_bc_bottom = torch.full((N_bc, 1), self.config.get('bc_bottom', 0.0))
+        
+        # Top boundary (y=1)
+        x_bc_top = torch.rand(N_bc, 1) * (x_domain[1] - x_domain[0]) + x_domain[0]
+        y_bc_top = torch.ones(N_bc, 1) * y_domain[1]
+        X_bc_top = torch.cat([x_bc_top, y_bc_top], dim=1)
+        p_bc_top = torch.full((N_bc, 1), self.config.get('bc_top', 0.0))
+        
+        # Combine all boundaries
+        self.X_bc = torch.cat([X_bc_left, X_bc_right, X_bc_bottom, X_bc_top], dim=0).to(self.device)
+        self.u_bc = torch.cat([p_bc_left, p_bc_right, p_bc_bottom, p_bc_top], dim=0).to(self.device)
+        
+        # ========== Data points (from FDM solution) ==========
+        if self.config.get('use_data_loss', False):
+            N_data = self.config.get('N_data', 500)
+            fdm_solution = self.config.get('fdm_solution', None)
+            
+            if fdm_solution is not None:
+                print(f"  Loading {N_data} data points from FDM solution...")
+                
+                # Randomly sample spatial points
+                x_data = torch.rand(N_data, 1) * (x_domain[1] - x_domain[0]) + x_domain[0]
+                y_data = torch.rand(N_data, 1) * (y_domain[1] - y_domain[0]) + y_domain[0]
+                self.X_data = torch.cat([x_data, y_data], dim=1).to(self.device)
+                
+                # Interpolate FDM solution
+                self.u_data = self._interpolate_fdm_data(
+                    x_data.cpu().numpy(),
+                    y_data.cpu().numpy(),
+                    fdm_solution
+                )
+                
+                print(f"  ✓ Generated {N_data} data points from FDM solution")
+            else:
+                print("  ⚠ Warning: use_data_loss=True but no fdm_solution provided")
+                self.X_data = None
+                self.u_data = None
+        else:
+            self.X_data = None
+            self.u_data = None
+    
+    def _interpolate_fdm_data(self, x_query, y_query, fdm_solution):
+        """Interpolate FDM data at query points"""
+        from scipy.interpolate import RegularGridInterpolator
+        
+        p_grid, x_grid, y_grid = fdm_solution
+        
+        # Create interpolator (p_grid is [nx, ny], corresponding to (x, y))
+        interpolator = RegularGridInterpolator(
+            (x_grid, y_grid),
+            p_grid,
+            method='linear',
+            bounds_error=False,
+            fill_value=0.0
+        )
+        
+        points = np.concatenate([x_query, y_query], axis=1)
+        p_interp = interpolator(points)
+        
+        return torch.tensor(p_interp, dtype=torch.float32).reshape(-1, 1).to(self.device)
+    
+    def pde_residual(self, X):
+        """
+        Compute PDE residual: f = -K * (∂²p/∂x² + ∂²p/∂y²) - f_source
+        """
+        if not X.requires_grad:
+            X = X.clone().detach().requires_grad_(True)
+        
+        p = self.model(X)
+        
+        # First derivatives
+        grad_p = torch.autograd.grad(
+            p, X, torch.ones_like(p),
+            create_graph=True, retain_graph=True
+        )[0]
+        
+        p_x = grad_p[:, 0:1]
+        p_y = grad_p[:, 1:2]
+        
+        # Second derivatives
+        p_xx = torch.autograd.grad(
+            p_x, X, torch.ones_like(p_x),
+            create_graph=True, retain_graph=True
+        )[0][:, 0:1]
+        
+        p_yy = torch.autograd.grad(
+            p_y, X, torch.ones_like(p_y),
+            create_graph=True, retain_graph=True
+        )[0][:, 1:2]
+        
+        # Laplacian
+        laplacian = p_xx + p_yy
+        
+        # Source term
+        if callable(self.f_source):
+            f = self.f_source(X[:, 0:1], X[:, 1:2])
+        else:
+            f = torch.zeros_like(p)
+        
+        # PDE residual
+        residual = -self.K * laplacian - f
+        
+        return residual
+    
+    def loss_bc(self):
+        """Compute boundary condition loss (all Dirichlet)"""
+        if self.X_bc is None:
+            return torch.tensor(0.0, device=self.device)
+        
+        p_pred = self.model(self.X_bc)
+        return torch.mean((p_pred - self.u_bc) ** 2)
+    
+    def compute_loss(self):
+        """Compute total loss"""
+        lambda_pde = self.config.get('lambda_pde', 1.0)
+        lambda_bc = self.config.get('lambda_bc_dirichlet', 10.0)
+        lambda_data = self.config.get('lambda_data', 100.0)
+        
+        # PDE loss
+        loss_pde_val = self.loss_pde()
+        
+        # BC loss
+        loss_bc_val = self.loss_bc()
+        
+        # Data loss
+        loss_data_val = self.loss_data()
+        
+        # Total loss
+        total_loss = (lambda_pde * loss_pde_val +
+                     lambda_bc * loss_bc_val +
+                     lambda_data * loss_data_val)
+        
+        loss_dict = {
+            'total': total_loss.item(),
+            'pde': loss_pde_val.item(),
+            'bc': loss_bc_val.item(),
+            'data': loss_data_val.item()
+        }
+        
+        return total_loss, loss_dict
+
+

@@ -1,19 +1,18 @@
-# 文件名: experiment_burgers.py
+# 文件名: experiment_wave.py
 
 """
-Burgers Equation Experiment with Loss Landscape Visualization
+1D Wave Equation Experiment with Loss Landscape Visualization
 
 This experiment compares:
-1. Standard PINN training for viscous Burgers equation
-2. Curriculum learning PINN with viscosity ramping
+1. Standard PINN training
+2. Curriculum learning PINN
 3. Ground truth from FDM solver
 
 Features:
-- FDM stability checking (advective + diffusive CFL)
-- Viscosity curriculum learning (multi-stage)
+- Automatic FDM stability checking
 - Loss landscape visualization
-- Training trajectory tracking with stage annotations
-- Comprehensive solution and error analysis
+- Training trajectory tracking
+- Comprehensive plots and metrics
 """
 
 import sys
@@ -26,28 +25,16 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.models.neural_networks import create_model
-from src.solvers.standard_pinn import BurgersPINN
-from src.solvers.curriculum_pinn import CurriculumBurgersPINN
-from src.numerics.fdm_burgers import BurgersFDM
-from src.visualization.burgers_plots import create_all_burgers_plots
+from src.solvers.standard_pinn import WavePINN
+from src.solvers.curriculum_pinn import CurriculumWavePINN
+from src.numerics.fdm_wave import WaveFDM
+from src.visualization.wave_plots import create_all_wave_plots
 from src.visualization.loss_landscape_generic import LossLandscapeVisualizer
-from src.configs.burgers_config import get_config
+from src.configs.wave_config import get_config
 
 
 def check_fdm_stability(config):
-    """
-    Check FDM stability before running expensive computations.
-    
-    For Burgers equation, we check both:
-    - Advective CFL: u*dt/dx <= 1.0
-    - Diffusive CFL: 2*nu*dt/dx^2 <= 0.5
-    
-    Args:
-        config: Configuration dictionary
-    
-    Returns:
-        bool: Whether parameters are stable
-    """
+    """Check FDM stability before running"""
     print("\n" + "="*80)
     print("PRE-FLIGHT CHECK: FDM Stability Analysis")
     print("="*80)
@@ -56,41 +43,33 @@ def check_fdm_stability(config):
     nt = config["fdm_nt"]
     x_domain = config["x_domain"]
     t_domain = config["t_domain"]
-    nu = config["nu"]
+    c = config["c"]
     
     dx = (x_domain[1] - x_domain[0]) / (nx - 1)
     dt = (t_domain[1] - t_domain[0]) / (nt - 1)
     
-    # Estimate maximum velocity (depends on initial condition)
-    u_max_est = 1.0
-    cfl_adv = u_max_est * dt / dx
-    cfl_diff = 2 * nu * dt / (dx**2)
+    cfl = c * dt / dx
     
-    print(f"  Spatial step: dx = {dx:.6f}")
-    print(f"  Time step: dt = {dt:.6f}")
-    print(f"  Viscosity: nu = {nu:.6f}")
-    print(f"  Advective CFL = u*dt/dx = {cfl_adv:.4f} (must be <= 1.0)")
-    print(f"  Diffusive CFL = 2*nu*dt/dx^2 = {cfl_diff:.4f} (must be <= 0.5)")
+    print(f"  dx = {dx:.6f}, dt = {dt:.6f}")
+    print(f"  Wave speed c = {c:.2f}")
+    print(f"  CFL = c*dt/dx = {cfl:.4f} (must be <= 1.0)")
     
-    is_stable = cfl_adv <= 1.0 and cfl_diff <= 0.5
+    is_stable = cfl <= 1.0
     
     if is_stable:
         print("  ✓ FDM parameters are STABLE")
     else:
         print("  ✗ FDM parameters are UNSTABLE")
-        if cfl_adv > 1.0:
-            print(f"    → Advective instability: increase nt or nx")
-        if cfl_diff > 0.5:
-            print(f"    → Diffusive instability: increase nt or decrease nu")
+        print(f"  Suggested: increase nt to at least {int(c * (t_domain[1] - t_domain[0]) / dx) + 1}")
     
     print("="*80 + "\n")
     
     return is_stable
 
 
-def prepare_burgers_evaluation_data(config, device, n_samples=2000):
+def prepare_evaluation_data(config, device, n_samples=2000):
     """
-    Prepare evaluation data for Burgers equation loss landscape.
+    Prepare evaluation data for loss landscape computation.
     
     Args:
         config: Experiment configuration
@@ -99,7 +78,7 @@ def prepare_burgers_evaluation_data(config, device, n_samples=2000):
     
     Returns:
         X_eval: Input tensor (x, t)
-        u_target: Target tensor (dummy, will use PDE residual)
+        u_target: Target tensor (dummy, will use PDE loss)
     """
     print(f"  Preparing {n_samples} evaluation points...")
     
@@ -113,22 +92,20 @@ def prepare_burgers_evaluation_data(config, device, n_samples=2000):
     X_eval = torch.tensor(np.column_stack([x_eval, t_eval]), 
                          dtype=torch.float32, device=device)
     
-    # For Burgers equation, we use PDE residual
+    # For wave equation, we'll use PDE residual as the metric
     # Create dummy target (zeros)
     u_target = torch.zeros(n_samples, 1, dtype=torch.float32, device=device)
     
     return X_eval, u_target
 
 
-def create_burgers_loss_landscape(standard_pinn, curriculum_pinn, config,
-                                  output_dir, landscape_steps=35,
-                                  landscape_distance=1.0):
+def create_loss_landscape_plots(results_dict, config, output_dir, 
+                                landscape_steps=40, landscape_distance=1.0):
     """
-    Create loss landscape visualizations for Burgers equation.
+    Create loss landscape visualizations comparing standard and curriculum learning.
     
     Args:
-        standard_pinn: Trained standard PINN solver
-        curriculum_pinn: Trained curriculum PINN solver
+        results_dict: Dictionary with training results
         config: Experiment configuration
         output_dir: Directory to save plots
         landscape_steps: Resolution of landscape grid
@@ -145,10 +122,14 @@ def create_burgers_loss_landscape(standard_pinn, curriculum_pinn, config,
         return
     
     # Prepare evaluation data
-    X_eval, u_target = prepare_burgers_evaluation_data(config, device='cpu')
+    X_eval, u_target = prepare_evaluation_data(config, device='cpu')  # Use CPU for landscape
     
-    # Get model class and kwargs
-    model_class = type(standard_pinn.model)
+    # Extract solvers
+    pinn_standard = results_dict['standard']['solver']
+    pinn_curriculum = results_dict['curriculum']['solver']
+    
+    # Get model class and kwargs for trajectory projection
+    model_class = type(pinn_standard.model)
     
     # Build model_kwargs based on model type
     if config['model_type'] == 'mlp':
@@ -178,33 +159,21 @@ def create_burgers_loss_landscape(standard_pinn, curriculum_pinn, config,
             'activation': config['activation']
         }
     
-    # Extract curriculum stage information
-    stage_boundaries = getattr(curriculum_pinn, 'stage_boundaries', [])
-    curriculum_stages = config.get('curriculum_stages', [])
-    
-    # Create stage names with viscosity values
-    if curriculum_stages and stage_boundaries:
-        stage_names = [f"ν={stage['nu']:.4f}" for stage in curriculum_stages]
-    else:
-        stage_names = []
-    
     # Prepare data for visualization
     landscape_data = {
         'Standard PINN': {
-            'model': standard_pinn.model.cpu(),
-            'trajectory_states': getattr(standard_pinn, 'trajectory_states', []),
-            'trajectory_epochs': getattr(standard_pinn, 'trajectory_epochs', []),
-            'color': 'cyan',
-            'label_suffix': f' (ν={config["nu"]:.4f})'
+            'model': pinn_standard.model.cpu(),
+            'trajectory_states': getattr(pinn_standard, 'trajectory_states', []),
+            'trajectory_epochs': getattr(pinn_standard, 'trajectory_epochs', []),
+            'color': 'cyan'
         },
         'Curriculum PINN': {
-            'model': curriculum_pinn.model.cpu(),
-            'trajectory_states': getattr(curriculum_pinn, 'trajectory_states', []),
-            'trajectory_epochs': getattr(curriculum_pinn, 'trajectory_epochs', []),
+            'model': pinn_curriculum.model.cpu(),
+            'trajectory_states': getattr(pinn_curriculum, 'trajectory_states', []),
+            'trajectory_epochs': getattr(pinn_curriculum, 'trajectory_epochs', []),
             'color': 'yellow',
-            'stage_boundaries': stage_boundaries,
-            'stage_names': stage_names,
-            'label_suffix': f' (ν: {curriculum_stages[0]["nu"]:.4f}→{curriculum_stages[-1]["nu"]:.4f})' if curriculum_stages else ''
+            'stage_boundaries': getattr(pinn_curriculum, 'stage_boundaries', []),
+            'stage_names': ['Curriculum Stage'] if hasattr(pinn_curriculum, 'stage_boundaries') else []
         }
     }
     
@@ -216,7 +185,7 @@ def create_burgers_loss_landscape(standard_pinn, curriculum_pinn, config,
         u_target=u_target,
         model_class=model_class,
         model_kwargs=model_kwargs,
-        filename=os.path.join(output_dir, 'loss_landscape_2d_burgers.png'),
+        filename=os.path.join(output_dir, 'loss_landscape_2d_wave.png'),
         steps=landscape_steps,
         distance=landscape_distance
     )
@@ -229,22 +198,22 @@ def create_burgers_loss_landscape(standard_pinn, curriculum_pinn, config,
         u_target=u_target,
         model_class=model_class,
         model_kwargs=model_kwargs,
-        filename=os.path.join(output_dir, 'loss_landscape_3d_burgers.png'),
+        filename=os.path.join(output_dir, 'loss_landscape_3d_wave.png'),
         steps=landscape_steps,
         distance=landscape_distance
     )
     
-    print("  ✓ Loss landscape visualizations complete!\n")
+    print("  ✓ Loss landscape visualizations complete!")
 
 
-def run_burgers_experiment(config_name='default', output_dir='outputs/burgers',
-                          use_data_loss=False, enable_landscape=True,
-                          landscape_steps=35, landscape_distance=1.0):
+def run_wave_experiment(config_name='default', output_dir='outputs/wave',
+                       use_data_loss=False, enable_landscape=True,
+                       landscape_steps=40, landscape_distance=1.0):
     """
-    Run complete Burgers equation experiment.
+    Run complete 1D Wave equation experiment.
     
     Args:
-        config_name: Configuration name from burgers_config.py
+        config_name: Configuration name from wave_config.py
         output_dir: Directory to save results
         use_data_loss: Whether to use data loss during training
         enable_landscape: Whether to generate loss landscape plots
@@ -254,13 +223,12 @@ def run_burgers_experiment(config_name='default', output_dir='outputs/burgers',
     # Load configuration
     config = get_config(config_name)
     
-    # Override data loss setting if specified
     if use_data_loss:
         config['use_data_loss'] = True
         print(f"\n⚠ Data loss ENABLED with {config['N_data']} sampling points")
     
     print("\n" + "="*80)
-    print(f"BURGERS EQUATION EXPERIMENT: {config_name}")
+    print(f"1D WAVE EQUATION EXPERIMENT: {config_name}")
     print("="*80)
     print("\nConfiguration:")
     print(json.dumps({k: v for k, v in config.items() if k != 'fdm_solution'}, indent=2))
@@ -284,17 +252,18 @@ def run_burgers_experiment(config_name='default', output_dir='outputs/burgers',
     print("STEP 1: Generating Ground Truth with FDM")
     print("="*80 + "\n")
     
-    fdm_solver = BurgersFDM(
-        nu=config['nu'],
+    fdm_solver = WaveFDM(
+        c=config['c'],
         x_domain=config['x_domain'],
         t_domain=config['t_domain'],
         nx=config['fdm_nx'],
-        nt=config['fdm_nt']
+        nt=config['fdm_nt'],
+        k=config['k']
     )
     u_exact, x_grid, t_grid = fdm_solver.solve()
     print("  ✓ Ground truth generated\n")
     
-    # Store FDM solution in config for data loss
+    # Store FDM solution
     fdm_solution = (u_exact, x_grid, t_grid)
     
     # =========================================================================
@@ -306,39 +275,34 @@ def run_burgers_experiment(config_name='default', output_dir='outputs/burgers',
     
     # Create model
     if config['model_type'] == 'mlp':
-        model_std = create_model(
-            model_type='mlp',
-            layers=config['layers'],
-            activation=config['activation']
-        )
+        model_std = create_model(model_type='mlp', layers=config['layers'],
+                                activation=config['activation'])
     elif config['model_type'] == 'resnet':
-        model_std = create_model(
-            model_type='resnet',
-            input_dim=config['input_dim'],
-            hidden_dim=config['hidden_dim'],
-            output_dim=config['output_dim'],
-            num_blocks=config.get('num_blocks', 4),
-            activation=config['activation']
-        )
+        model_std = create_model(model_type='resnet',
+                                input_dim=config['input_dim'],
+                                hidden_dim=config['hidden_dim'],
+                                output_dim=config['output_dim'],
+                                num_blocks=config.get('num_blocks', 4),
+                                activation=config['activation'])
     elif config['model_type'] == 'fourier':
-        model_std = create_model(
-            model_type='fourier',
-            layers=config['layers'],
-            input_dim=config['input_dim'],
-            fourier_dim=config['fourier_dim'],
-            sigma=config.get('sigma', 1.0),
-            activation=config['activation']
-        )
+        model_std = create_model(model_type='fourier',
+                                layers=config['layers'],
+                                input_dim=config['input_dim'],
+                                fourier_dim=config['fourier_dim'],
+                                sigma=config.get('sigma', 1.0),
+                                activation=config['activation'])
     
-    # Create solver config (inject FDM solution)
+    # Create solver config
     standard_config = {
-        'nu': config['nu'],
+        'c': config['c'],
+        'k': config['k'],
         'x_domain': config['x_domain'],
         't_domain': config['t_domain'],
         'N_ic': config['N_ic'],
         'N_bc': config['N_bc'],
         'N_pde': config['N_pde'],
         'lambda_ic': config['lambda_ic'],
+        'lambda_ic_t': config['lambda_ic_t'],
         'lambda_bc': config['lambda_bc'],
         'lambda_pde': config['lambda_pde'],
         'lambda_data': config['lambda_data'],
@@ -353,46 +317,40 @@ def run_burgers_experiment(config_name='default', output_dir='outputs/burgers',
         'fdm_solution': fdm_solution if config['use_data_loss'] else None,
     }
     
-    pinn_standard = BurgersPINN(model_std, standard_config, device=device)
+    pinn_standard = WavePINN(model_std, standard_config, device=device)
     pinn_standard.train(verbose=True, save_interval=2000)
     print("  ✓ Standard PINN training complete\n")
     
     # =========================================================================
-    # STEP 3: Train Curriculum PINN (Stage-based)
+    # STEP 3: Train Curriculum PINN
     # =========================================================================
     print("="*80)
-    print("STEP 3: Training Curriculum PINN (Multi-Stage)")
+    print("STEP 3: Training Curriculum PINN")
     print("="*80 + "\n")
     
-    # Create a new model instance for curriculum training
+    # Create new model
     if config['model_type'] == 'mlp':
-        model_curr = create_model(
-            model_type='mlp',
-            layers=config['layers'],
-            activation=config['activation']
-        )
+        model_curr = create_model(model_type='mlp', layers=config['layers'],
+                                 activation=config['activation'])
     elif config['model_type'] == 'resnet':
-        model_curr = create_model(
-            model_type='resnet',
-            input_dim=config['input_dim'],
-            hidden_dim=config['hidden_dim'],
-            output_dim=config['output_dim'],
-            num_blocks=config.get('num_blocks', 4),
-            activation=config['activation']
-        )
+        model_curr = create_model(model_type='resnet',
+                                 input_dim=config['input_dim'],
+                                 hidden_dim=config['hidden_dim'],
+                                 output_dim=config['output_dim'],
+                                 num_blocks=config.get('num_blocks', 4),
+                                 activation=config['activation'])
     elif config['model_type'] == 'fourier':
-        model_curr = create_model(
-            model_type='fourier',
-            layers=config['layers'],
-            input_dim=config['input_dim'],
-            fourier_dim=config['fourier_dim'],
-            sigma=config.get('sigma', 1.0),
-            activation=config['activation']
-        )
+        model_curr = create_model(model_type='fourier',
+                                 layers=config['layers'],
+                                 input_dim=config['input_dim'],
+                                 fourier_dim=config['fourier_dim'],
+                                 sigma=config.get('sigma', 1.0),
+                                 activation=config['activation'])
     
-    # The config already contains all curriculum parameters
-    # (e.g., 'curriculum_stages', 'nu_initial', 'nu_target')
-    pinn_curriculum = CurriculumBurgersPINN(model_curr, config, device=device)
+    curriculum_config = {**standard_config,
+                        'curriculum_ramp_ratio': config['curriculum_ramp_ratio']}
+    
+    pinn_curriculum = CurriculumWavePINN(model_curr, curriculum_config, device=device)
     pinn_curriculum.train(verbose=True, save_interval=2000)
     print("  ✓ Curriculum PINN training complete\n")
     
@@ -417,21 +375,20 @@ def run_burgers_experiment(config_name='default', output_dir='outputs/burgers',
             'solution': u_exact,
             'x': x_grid,
             't': t_grid,
-            'label': 'Numerical (FDM)'
+            'label': 'Exact (FDM)'
         }
     }
     
     os.makedirs(output_dir, exist_ok=True)
-    create_all_burgers_plots(results, output_dir=output_dir)
+    create_all_wave_plots(results, output_dir=output_dir)
     print("  ✓ Standard visualizations complete\n")
     
     # =========================================================================
     # STEP 5: Generate Loss Landscape Visualizations (Optional)
     # =========================================================================
     if enable_landscape:
-        create_burgers_loss_landscape(
-            standard_pinn=pinn_standard,
-            curriculum_pinn=pinn_curriculum,
+        create_loss_landscape_plots(
+            results_dict=results,
             config=config,
             output_dir=output_dir,
             landscape_steps=landscape_steps,
@@ -441,14 +398,14 @@ def run_burgers_experiment(config_name='default', output_dir='outputs/burgers',
     # =========================================================================
     # STEP 6: Save Models and Configuration
     # =========================================================================
-    print("="*80)
+    print("\n" + "="*80)
     print("STEP 6: Saving Models and Configuration")
     print("="*80 + "\n")
     
     pinn_standard.save_model(os.path.join(output_dir, 'standard_pinn.pt'))
     pinn_curriculum.save_model(os.path.join(output_dir, 'curriculum_pinn.pt'))
     
-    # Save configuration (exclude fdm_solution)
+    # Save configuration
     config_to_save = {k: v for k, v in config.items() if k != 'fdm_solution'}
     with open(os.path.join(output_dir, 'config.json'), 'w') as f:
         json.dump(config_to_save, f, indent=2)
@@ -459,26 +416,17 @@ def run_burgers_experiment(config_name='default', output_dir='outputs/burgers',
     # Summary
     # =========================================================================
     print("="*80)
-    print("BURGERS EXPERIMENT COMPLETED SUCCESSFULLY!")
+    print("1D WAVE EXPERIMENT COMPLETED SUCCESSFULLY!")
     print("="*80)
     print(f"\nResults saved to: {output_dir}")
     print(f"  - Standard PINN model: standard_pinn.pt")
     print(f"  - Curriculum PINN model: curriculum_pinn.pt")
     print(f"  - Configuration: config.json")
-    print(f"  - Solution visualizations: *.png")
+    print(f"  - Visualizations: *.png")
     if enable_landscape:
         print(f"  - Loss landscapes: loss_landscape_*.png")
-    
     if config['use_data_loss']:
         print(f"\n✓ Data loss was ENABLED with {config['N_data']} sampling points")
-    
-    # Print curriculum info
-    if 'curriculum_stages' in config and config['curriculum_stages']:
-        stages = config['curriculum_stages']
-        print(f"\n✓ Curriculum stages:")
-        for i, stage in enumerate(stages, 1):
-            print(f"    Stage {i}: ν={stage['nu']:.4f}, epochs={stage['epochs']}")
-    
     print("="*80 + "\n")
 
 
@@ -486,7 +434,7 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='Run Burgers equation experiment with curriculum learning',
+        description='Run 1D Wave equation experiment with curriculum learning',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
@@ -494,13 +442,13 @@ if __name__ == "__main__":
         '--config',
         type=str,
         default='default',
-        help='Configuration name (default, with_data, high_nu, low_nu, resnet, fourier)'
+        help='Configuration name from wave_config.py'
     )
     
     parser.add_argument(
         '--output',
         type=str,
-        default='outputs/burgers',
+        default='outputs/wave',
         help='Output directory for results'
     )
     
@@ -519,20 +467,20 @@ if __name__ == "__main__":
     parser.add_argument(
         '--landscape-steps',
         type=int,
-        default=200,
+        default=40,
         help='Resolution for loss landscape grid'
     )
     
     parser.add_argument(
         '--landscape-distance',
         type=float,
-        default=2.0,
+        default=1.0,
         help='Exploration distance for loss landscape'
     )
     
     args = parser.parse_args()
     
-    run_burgers_experiment(
+    run_wave_experiment(
         config_name=args.config,
         output_dir=args.output,
         use_data_loss=args.use_data_loss,

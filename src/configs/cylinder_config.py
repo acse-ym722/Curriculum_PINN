@@ -1,6 +1,6 @@
 """
 Configuration for 2D flow past a cylinder
-3 predefined configs: Low Re, Medium Re, High Re
+Only 3 predefined configs: Low Re, Medium Re, High Re
 """
 
 # ==================== 边界条件定义 ====================
@@ -10,7 +10,7 @@ BOUNDARY_CONDITIONS = {
         "type": "dirichlet",
         "u": "U_inf",      # 速度 u = U_inf
         "v": 0.0,          # 速度 v = 0
-        "p": None,         # 压力不约束
+        "p": 0.0,          # 压力参考值设为0（或者不施加约束）
         "omega": 0.0,      # 涡量 = 0 (势流)
     },
     
@@ -153,14 +153,14 @@ LOW_RE_CONFIG = {
     "Re_target": 40,
     
     # PINN training - 较少迭代即可收敛
-    "pinn_epochs": 150000,
+    "pinn_epochs": 30000,
     
     # Curriculum stages
-    "curriculum_total_epochs": 150000,
+    "curriculum_total_epochs": 30000,
     "curriculum_stages": [
-        {"Re": 10, "epochs": 15000},
-        {"Re": 20, "epochs": 15000},
-        {"Re": 40, "epochs": 120000},
+        {"Re": 10, "epochs": 3000},
+        {"Re": 20, "epochs": 3000},
+        {"Re": 40, "epochs": 24000},
     ],
     
     # Collocation points - 适度减少
@@ -196,14 +196,14 @@ MEDIUM_RE_CONFIG = {
     "Re_target": 100,
     
     # PINN training - 标准配置
-    "pinn_epochs": 300000,
+    "pinn_epochs": 60000,
     
     # Curriculum stages
-    "curriculum_total_epochs": 300000,
+    "curriculum_total_epochs": 60000,
     "curriculum_stages": [
-        {"Re": 10, "epochs": 25000},
-        {"Re": 40, "epochs": 25000},
-        {"Re": 100, "epochs": 250000},
+        {"Re": 10, "epochs": 5000},
+        {"Re": 40, "epochs": 5000},
+        {"Re": 100, "epochs": 50000},
     ],
     
     # Collocation points - 标准配置
@@ -239,15 +239,15 @@ HIGH_RE_CONFIG = {
     "Re_target": 200,
     
     # PINN training - 需要更多迭代
-    "pinn_epochs": 500000,
+    "pinn_epochs": 100000,
     
     # Curriculum stages - 更细致的课程学习
-    "curriculum_total_epochs": 500000,
+    "curriculum_total_epochs": 100000,
     "curriculum_stages": [
-        {"Re": 20, "epochs": 50000},
-        {"Re": 60, "epochs": 50000},
-        {"Re": 100, "epochs": 100000},
-        {"Re": 200, "epochs": 300000},
+        {"Re": 20, "epochs": 10000},
+        {"Re": 60, "epochs": 10000},
+        {"Re": 100, "epochs": 20000},
+        {"Re": 200, "epochs": 60000},
     ],
     
     # Collocation points - 增加采样密度

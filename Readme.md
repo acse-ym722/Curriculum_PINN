@@ -119,28 +119,18 @@ Theoretical investigation focuses on:
 
 ```bash
 # Run Burgers equation experiment
-python -m src.experiment_burgers --config default
-python -m src.experiment_burgers --config default --use-data-loss
-python -m src.eexperiment_burgers --config with_data
+python -m src.experiment_burgers --config default --output outputs/burgers_mlp
+python -m src.experiment_burgers --config resnet --output outputs/burgers_resnet
+python -m src.experiment_burgers --config fourier --output outputs/burgers_fourier
 
 # Run Cavity flow experiment
-python -m src.experiment_cavity --config low_re --use-data-loss
+python -m src.experiment_cavity --config low_re --output outputs/cavity_low_re
 python -m src.experiment_cavity --config high_re --output outputs/cavity_high_re
-# 1. 查看所有配置
-from src.configs.cylinder_config import print_all_configs
-print_all_configs()
 
-# 2. 查看详细配置信息
-from src.configs.cylinder_config import print_config_info
-print_config_info('low_re')
-
-# 3. 获取配置
-from src.configs.cylinder_config import get_config
-config = get_config('medium_re')
-# Run Cyliner flow experiment
-python -m src.experiment_cylinder --config low_re --output low_re
-python -m src.experiment_cylinder --config medium_re --output medium_re
-python -m src.experiment_cylinder --config high_re --output high_re
+# Run wave eqn experiment
+python -m src.experiment_wave
+python -m src.experiment_wave_2d --config default --output outputs/wave2d
+python -m src.experiment_wave_2d --config default --output outputs/wave2d_3step
 ```
 
 ### Configuration Examples

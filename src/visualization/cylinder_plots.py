@@ -159,7 +159,7 @@ def plot_cylinder_comparison(fdm_solver, pinn_standard, pinn_curriculum,
     plt.savefig(filepath, dpi=300, bbox_inches='tight')
     print(f"✓ Comparison plot saved to {filepath}")
     
-    plt.show()
+    # plt.show()
 
 
 def plot_cylinder_streamlines(fdm_solver, pinn_standard, pinn_curriculum,
@@ -236,7 +236,7 @@ def plot_cylinder_streamlines(fdm_solver, pinn_standard, pinn_curriculum,
     plt.savefig(filepath, dpi=300, bbox_inches='tight')
     print(f"✓ Streamlines plot saved to {filepath}")
     
-    plt.show()
+    # plt.show()
 
 
 def print_cylinder_metrics(fdm_solver, pinn_standard, pinn_curriculum, config):

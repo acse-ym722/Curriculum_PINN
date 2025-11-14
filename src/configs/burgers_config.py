@@ -5,12 +5,12 @@ Configuration for Burgers equation experiments
 # Default configuration for Burgers equation
 BURGERS_CONFIG = {
     # Physical parameters
-    "nu": 0.002,  # Viscosity coefficient
+    "nu": 0.002,
     "x_domain": [-1.0, 1.0],
     "t_domain": [0.0, 1.0],
     
     # Neural network architecture
-    "model_type": "mlp",  # Options: 'mlp', 'resnet', 'fourier'
+    "model_type": "mlp",
     "layers": [2, 32, 32, 32, 32, 32, 1],
     "activation": "tanh",
     
@@ -22,77 +22,101 @@ BURGERS_CONFIG = {
     "lr_decay_steps": 5000,
     "lr_decay_rate": 0.9,
     
-    # Curriculum learning parameters
-    "curriculum_ramp_ratio": 0.4,  # Portion of training for nu ramp
+    # ================= Stage-based Curriculum Learning =================
+    "nu_initial": 0.02, 
+    "nu_target": 0.002, 
+    
+    # ✅ 每个阶段都必须包含 "nu" 键
+    "curriculum_stages": [
+        {
+            "name": "Stage 1: High Viscosity", 
+            "epochs": 3000,
+            "nu": 0.02  # 高粘性（简单）
+        },
+        {
+            "name": "Stage 2: Annealing", 
+            "epochs": 5000,
+            "nu": 0.01  # 中等粘性（过渡）
+        },
+        {
+            "name": "Stage 3: Target Viscosity", 
+            "epochs": 12000,
+            "nu": 0.002  # 目标粘性（困难）
+        }
+    ],
+    # ==================================================================
     
     # Data points
-    "N_ic": 100,   # Initial condition points
-    "N_bc": 100,   # Boundary condition points
-    "N_pde": 10000,  # PDE collocation points
+    "N_ic": 100,
+    "N_bc": 100,
+    "N_pde": 10000,
 
     # Data loss parameters
-    "use_data_loss": False,      # 默认不使用，实验时设置为True
-    "N_data": 500,               # 数据采样点数量
-    "fdm_solution": None,        # FDM solution tuple (u, x, t)，运行时指定
+    "use_data_loss": True,
+    "N_data": 1000,
+    "fdm_solution": None,
 
     # Loss weights
     "lambda_ic": 1.0,
     "lambda_bc": 1.0,
     "lambda_pde": 1.0,
-    "lambda_data": 1.0,
+    "lambda_data": 10.0,
 
-    # Numerical solution (ground truth) - FDM parameters
-    "fdm_nx": 512,     # Spatial grid points
-    "fdm_nt": 10000,   # Time steps
+    # Numerical solution (ground truth)
+    "fdm_nx": 512,
+    "fdm_nt": 10000,
     
     # Visualization
-    "plot_t_final": 0.99,  # Time for final comparison
-    "plot_x_points": 512,  # Spatial resolution for plotting
+    "plot_t_final": 0.99,
+    "plot_x_points": 512,
 }
 
 
-# Configuration with data loss enabled
-BURGERS_WITH_DATA = {
-    **BURGERS_CONFIG,
-    "use_data_loss": True,
-    "N_data": 1000,
-    "lambda_data": 10.0,  # 增加data loss权重
-}
-
-
-# High viscosity configuration (easier problem)
+# High viscosity configuration
 BURGERS_HIGH_NU = {
     **BURGERS_CONFIG,
     "nu": 0.01,
+    "nu_target": 0.01,  # ✅ 同步修改
     "epochs": 10000,
+    "curriculum_stages": [
+        {"name": "Stage 1", "epochs": 3000, "nu": 0.05},
+        {"name": "Stage 2", "epochs": 4000, "nu": 0.02},
+        {"name": "Stage 3", "epochs": 3000, "nu": 0.01}
+    ],
 }
 
 
-# Low viscosity configuration (harder problem)
+# Low viscosity configuration
 BURGERS_LOW_NU = {
     **BURGERS_CONFIG,
     "nu": 0.001,
+    "nu_target": 0.001,  # ✅ 同步修改
     "epochs": 30000,
     "N_pde": 20000,
+    "curriculum_stages": [
+        {"name": "Stage 1", "epochs": 10000, "nu": 0.01},
+        {"name": "Stage 2", "epochs": 10000, "nu": 0.005},
+        {"name": "Stage 3", "epochs": 10000, "nu": 0.001}
+    ],
 }
 
 
-# Configuration with ResNet architecture
+# ResNet configuration
 BURGERS_RESNET = {
     **BURGERS_CONFIG,
     "model_type": "resnet",
     "input_dim": 2,
     "hidden_dim": 64,
     "output_dim": 1,
-    "num_blocks": 4,
+    "num_blocks": 5,
 }
 
 
-# Configuration with Fourier features
+# Fourier configuration
 BURGERS_FOURIER = {
     **BURGERS_CONFIG,
     "model_type": "fourier",
-    "layers": [256, 64, 64, 64, 1],  # After Fourier embedding
+    "layers": [256, 64, 64, 64, 1],
     "input_dim": 2,
     "fourier_dim": 256,
     "sigma": 1.0,
@@ -111,7 +135,6 @@ def get_config(config_name='default'):
     """
     configs = {
         'default': BURGERS_CONFIG,
-        'with_data': BURGERS_WITH_DATA,
         'high_nu': BURGERS_HIGH_NU,
         'low_nu': BURGERS_LOW_NU,
         'resnet': BURGERS_RESNET,

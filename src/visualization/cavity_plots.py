@@ -1,11 +1,60 @@
 """
-Visualization utilities for lid-driven cavity flow experiments
+Visualization and data saving utilities for lid-driven cavity flow experiments
 """
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from scipy.interpolate import RectBivariateSpline
+import os
+import pandas as pd
 
+# ==============================================================================
+# 新增：数据保存函数
+# ==============================================================================
+
+def save_loss_history(standard_pinn, curriculum_pinn, output_dir='outputs/cavity'):
+    """
+    Saves the training loss history for both PINNs to a single CSV file.
+
+    The resulting CSV file will have three columns: 'epoch', 
+    'standard_pinn_loss', and 'curriculum_pinn_loss'. If the training lengths
+    differ, the shorter column will be padded with NaN values.
+
+    Args:
+        standard_pinn: Standard PINN solver object.
+        curriculum_pinn: Curriculum PINN solver object.
+        output_dir: Base directory to save the data file.
+    """
+    print("\n" + "="*80)
+    print("SAVING TRAINING LOSS HISTORY")
+    print("="*80)
+
+    data_path = os.path.join(output_dir, 'raw_data')
+    os.makedirs(data_path, exist_ok=True)
+
+    # 获取 loss 历史
+    std_loss = standard_pinn.loss_history
+    curr_loss = curriculum_pinn.loss_history
+
+    # 使用 pandas.Series 可以优雅地处理两个列表长度不同的情况
+    df = pd.DataFrame({
+        'standard_pinn_loss': pd.Series(std_loss),
+        'curriculum_pinn_loss': pd.Series(curr_loss)
+    })
+
+    # 添加 epoch 列，从 1 开始
+    df.insert(0, 'epoch', range(1, len(df) + 1))
+
+    # 定义文件路径并保存
+    filepath_csv = os.path.join(data_path, 'training_loss_comparison.csv')
+    df.to_csv(filepath_csv, index=False, float_format='%.6e')
+    
+    print(f"✓ Combined loss history saved to {filepath_csv}")
+
+
+# ==============================================================================
+# 以下为您的原始代码，保持不变
+# ==============================================================================
 
 def plot_cavity_comparison(fdm_solver, standard_pinn, curriculum_pinn, 
                            config, output_dir='outputs/cavity'):
@@ -20,7 +69,6 @@ def plot_cavity_comparison(fdm_solver, standard_pinn, curriculum_pinn,
         output_dir: Directory to save plots
     """
     import torch
-    import os
     
     Re = config['Re_target']
     resolution = 100
@@ -120,13 +168,14 @@ def plot_cavity_comparison(fdm_solver, standard_pinn, curriculum_pinn,
             
             # Add streamlines for velocity fields
             if i < 3 or (5 <= i < 8):
-                if i < 3:
-                    U_plot, V_plot = data[i], V_fdm
-                elif 5 <= i < 8:
-                    U_plot, V_plot = data[i], V_fdm
-                else:
-                    U_plot, V_plot = U_fdm, V_fdm
-                    
+                # Correctly pair u and v for streamplot
+                if i < 3: # u-velocity plots
+                    U_plot = data[i]
+                    V_plot = data[i+5] # Corresponding v-velocity
+                elif 5 <= i < 8: # v-velocity plots
+                    U_plot = data[i-5] # Corresponding u-velocity
+                    V_plot = data[i]
+                
                 ax.streamplot(X_grid, Y_grid, U_plot, V_plot, 
                              color='white', linewidth=0.5, density=1.2, arrowsize=0.6)
     
@@ -140,7 +189,7 @@ def plot_cavity_comparison(fdm_solver, standard_pinn, curriculum_pinn,
     plt.savefig(filepath, dpi=150, bbox_inches='tight')
     print(f"✓ Comparison plot saved to {filepath}")
     
-    plt.show()
+    # plt.show()
 
 
 def plot_cavity_centerlines(fdm_solver, standard_pinn, curriculum_pinn, 
@@ -156,7 +205,6 @@ def plot_cavity_centerlines(fdm_solver, standard_pinn, curriculum_pinn,
         output_dir: Directory to save plots
     """
     import torch
-    import os
     
     resolution = 200
     
@@ -217,7 +265,7 @@ def plot_cavity_centerlines(fdm_solver, standard_pinn, curriculum_pinn,
     plt.savefig(filepath, dpi=150, bbox_inches='tight')
     print(f"✓ Centerline plot saved to {filepath}")
     
-    plt.show()
+    # plt.show()
 
 
 def print_cavity_metrics(fdm_solver, standard_pinn, curriculum_pinn, config):
@@ -302,10 +350,14 @@ def print_cavity_metrics(fdm_solver, standard_pinn, curriculum_pinn, config):
     print("="*80 + "\n")
 
 
+# ==============================================================================
+# 修改后的主调用函数
+# ==============================================================================
+
 def create_all_cavity_plots(fdm_solver, standard_pinn, curriculum_pinn, 
                             config, output_dir='outputs/cavity'):
     """
-    Generate all plots for cavity flow
+    Generate all outputs (loss data and plots) for the cavity flow experiment.
     
     Args:
         fdm_solver: FDM solver object
@@ -314,8 +366,12 @@ def create_all_cavity_plots(fdm_solver, standard_pinn, curriculum_pinn,
         config: Configuration dictionary
         output_dir: Directory to save plots
     """
+    # 1. 新增：保存训练损失历史
+    save_loss_history(standard_pinn, curriculum_pinn, output_dir)
+
+    # 2. 原有功能：生成可视化图表和打印指标
     print("\n" + "="*80)
-    print("GENERATING VISUALIZATION FOR CAVITY FLOW")
+    print("GENERATING VISUALIZATIONS FOR CAVITY FLOW")
     print("="*80 + "\n")
     
     plot_cavity_comparison(fdm_solver, standard_pinn, curriculum_pinn, 
@@ -324,4 +380,4 @@ def create_all_cavity_plots(fdm_solver, standard_pinn, curriculum_pinn,
                            config, output_dir)
     print_cavity_metrics(fdm_solver, standard_pinn, curriculum_pinn, config)
     
-    print("✓ All visualizations completed!\n")
+    print("✓ All data saving and visualization tasks completed!\n")
