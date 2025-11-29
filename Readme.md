@@ -27,6 +27,29 @@ conda activate pinn
 2. Install PyTorch 安装PyTorch:
 ```bash
 # Visit https://pytorch.org/ for the correct command for your system
+# code tested on Ubuntu 22.04 with Cuda version 12.6
+# run the code visualize current cuda version 
+(pinn) yang@DESKTOP-TNJH297:~/Downloads/Curriculum_PINN$ nvidia-smi
+Sat Nov 29 15:08:12 2025       
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 520.61.05    Driver Version: 560.94       CUDA Version: 12.6     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|                               |                      |               MIG M. |
+|===============================+======================+======================|
+|   0  NVIDIA GeForce ...  On   | 00000000:01:00.0  On |                  Off |
+|  0%   32C    P8    10W / 500W |   1141MiB / 24564MiB |      2%      Default |
+|                               |                      |                  N/A |
++-------------------------------+----------------------+----------------------+
+                                                                               
++-----------------------------------------------------------------------------+
+| Processes:                                                                  |
+|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |
+|        ID   ID                                                   Usage      |
+|=============================================================================|
+|  No running processes found                                                 |
++-----------------------------------------------------------------------------+
 pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 ```
 
@@ -88,24 +111,8 @@ project_root/
      * Far-field uniform flow conditions
    - Implementation: See `experiment_cylinder.py`
 
-### Phase 2: Optimization - Adaptive Curriculum Design
-第二阶段：优化研究 - 自适应课程设计
-
-Three adaptive strategies for curriculum learning:
-
-1. **Loss-Plateau-Based Adaptation**
-   - Monitors loss plateau for difficulty adjustment
-   - Automatically increases β when learning stabilizes
-
-2. **Gradient-Norm-Based Adaptation**
-   - Uses gradient norm as optimization indicator
-   - Adjusts curriculum based on optimization dynamics
-
-3. **Multi-task Learning Gradient Balancing**
-   - Balances multiple learning objectives
-   - Optimizes curriculum progression based on task gradients
-
-### Phase 3: Theoretical Analysis
+4. **2D Wave Equation 二维波动方程**
+### Phase 2: Theoretical Analysis
 第三阶段：理论分析
 
 Theoretical investigation focuses on:
@@ -169,12 +176,6 @@ Each experiment generates:
 - `curriculum_pinn.pt`: Trained curriculum PINN model
 - `config.json`: Experiment configuration
 
-## Dependencies 依赖
-
-- PyTorch (Neural network framework)
-- NumPy (Numerical computations)
-- Matplotlib (Visualization)
-- SciPy (Scientific computing, sparse matrix operations)
 
 ## Contributing 贡献
 
@@ -195,9 +196,9 @@ If you use this framework in your research, please cite:
 
 ```bibtex
 @software{curriculum_pinn,
-  title={Curriculum Learning-based Physics-Informed Neural Networks},
-  author={Your Name},
+  title={Curriculum Learning Physics-Informed Neural Networks for Parametric PDEs},
+  author={Yang Meng},
   year={2025},
-  url={https://github.com/yourusername/Curriculum_PINN}
+  url={https://github.com/acse-ym722/Curriculum_PINN}
 }
 ```
